@@ -28,15 +28,8 @@
 #include "movement_faces.h"
 
 const watch_face_t watch_faces[] = {
+    dungeon_face,
     clock_face,
-    world_clock_face,
-    sunrise_sunset_face,
-    moon_phase_face,
-    fast_stopwatch_face,
-    countdown_face,
-    alarm_face,
-    temperature_display_face,
-    voltage_face,
     settings_face,
     set_time_face,
 };
