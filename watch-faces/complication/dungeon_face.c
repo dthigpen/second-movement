@@ -79,7 +79,6 @@ void (*display)(movement_event_t event, void *context);
 typedef struct {
 // meta
 dngn_screen_t last_screen;
-dngn_screen_t next_screen; // for after an animation finishes
 dngn_screen_t screen;
 dngn_screen_def_t screens[DNGN_SCREEN_COUNT];
 
@@ -162,12 +161,9 @@ const animation_def_t DNGN_ANIM_DESCEND = {
 
 // --- END animation definitions
 
-static void dngn_start_animation(dngn_state_t *state, const animation_def_t* anim_def, dngn_screen_t next_screen) {
-    printf("dngn_start_animation starting animation and going to screen %d\n", next_screen);
-    state->screen = next_screen;
+static void dngn_start_animation(dngn_state_t *state, const animation_def_t* anim_def) {
     animation_start(&state->animation, anim_def, (void *) state);
     movement_request_tick_frequency(4);
-
 }
 
 // ---------- forward declarations ----------
@@ -244,7 +240,12 @@ static void _generate_loot(dngn_state_t *state) {
     }
 }
 
-static void _generate_room(dngn_state_t *state) {
+// sets state values for a new room of random type and sets the corresponding screen
+static void _enter_random_room(dngn_state_t *state) {
+    // setup animation
+    dngn_start_animation(state, &DNGN_ANIM_DESCEND);
+
+    // generate random room
     weighted_choice_t room_weights[][3] = {
         // floors 1-5
         {{ 50, DNGN_ROOM_ENEMY },
@@ -259,7 +260,7 @@ static void _generate_room(dngn_state_t *state) {
         { 20, DNGN_ROOM_LOOT },
         { 10, DNGN_ROOM_EMPTY }},
     };
-    uint8_t bracket = state->floor <= 5 ? 0 : state->floor <= 10 ? 1 : 2;
+    uint8_t bracket = ++state->floor <= 5 ? 0 : state->floor <= 10 ? 1 : 2;
     // uint8_t r = _rand(3);
     uint8_t r = weighted_roll(room_weights[bracket], 3);
     state->current_room = (dngn_room_type_t)r;
@@ -270,16 +271,22 @@ static void _generate_room(dngn_state_t *state) {
     } else if (state->current_room == DNGN_ROOM_LOOT) {
         _generate_loot(state);
     }
+
+    // set the screen to the one corresponding to the room type
+    state->screen = (state->current_room == DNGN_ROOM_ENEMY)
+            ? DNGN_SCREEN_ENCOUNTER
+            : (state->current_room == DNGN_ROOM_LOOT)
+                ? DNGN_SCREEN_LOOT
+                : DNGN_SCREEN_STATUS;
 }
 
 
 static void reset_player_state(dngn_state_t* state) {
-    state->floor = 1;
+    state->floor = 0;
     state->player_max_hp = 10;
     state->player_hp = 10;
     state->player_attack = 2;
     state->potions = 1;
-    state->screen = DNGN_SCREEN_FLOOR_START;
 }
 
 
@@ -315,14 +322,11 @@ void dungeon_face_activate(void *context) {
 bool dungeon_face_loop(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
-    // for now skip regular processing if in the middle of drawing an animation
-    // if(dngn_process_animation(state, event)){
-    //     movement_default_loop_handler(event);
-    //     return true;
-    // }
     // if(event.event_type != EVENT_TICK) printf("dungeon_face_loop screen=%d, last_screen=%d, event_type=%d, active=%d\n", state->screen, state->last_screen, event.event_type, state->active);
-
-    animation_tick(&state->animation);
+    
+    if(event.event_type == EVENT_TICK) {
+        animation_tick(&state->animation);
+    }
 
     dngn_screen_def_t *screen = &state->screens[state->screen];
     screen->transition(event, state);
@@ -331,7 +335,6 @@ bool dungeon_face_loop(movement_event_t event, void *context) {
     if (!animation_draw(&state->animation)) {
         // screen may change during transition
         screen = &state->screens[state->screen];
-        screen->display(event, state);
         screen->display(event, state);
     }
     return true;
@@ -343,39 +346,18 @@ static void _title_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     bool reset_state = false;
     if(event.event_type != EVENT_TICK) printf("_title_transition event_type=%d active=%d\n", event.event_type, state->active);
-    switch(event.event_type) {
-        case EVENT_ALARM_BUTTON_UP:
-            // if active then continue showing, so a short press should resume
-            // else reset player and start new run
-            printf("_title_transition EVENT_ALARM_BUTTON_DOWN\n");
-            
-            if(state->active) {
-                state->screen = state->last_screen;
-                printf("resuming\n");
-            } else {
-                state->active = true;
-                reset_player_state(state);
-                printf("starting new game\n");
-            }
-            break;
-        case EVENT_ALARM_LONG_PRESS:
-            printf("_title_transition EVENT_ALARM_LONG_PRESS\n");
 
-            if(state->active) {
-                reset_player_state(state);
-                printf("Reseting for new game\n");
-            }
-            break;
-        default:
-            if(event.event_type != EVENT_TICK) printf("_title_transition entering default handler\n");
-            movement_default_loop_handler(event);
-    }
-    bool start_new_run = !state->active && event.event_type == EVENT_ALARM_BUTTON_DOWN;
+    bool start_new_run = !state->active && event.event_type == EVENT_ALARM_BUTTON_UP;
     bool reset_old_run = state->active && event.event_type == EVENT_ALARM_LONG_PRESS;
+    bool play = event.event_type == EVENT_ALARM_BUTTON_UP || reset_old_run;
+
     if(start_new_run || reset_old_run) {
         // initialize player for new run
-        state->active = true;
         reset_player_state(state);
+    }
+    if (play) {
+        state->active = true;
+        _enter_random_room(state);
     }
 }
 
@@ -384,7 +366,7 @@ static void _title_display(movement_event_t event, void *context) {
     (void)context;
     dngn_state_t *state = (dngn_state_t *)context;
     watch_clear_display();
-    watch_display_text(WATCH_POSITION_TOP, "DNGN");
+    watch_display_text_with_fallback(WATCH_POSITION_TOP, "dngn","dn");
     if(state->active) {
         watch_display_text(WATCH_POSITION_BOTTOM, "Cont");
     } else {
@@ -397,12 +379,7 @@ static void _floor_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
     if (event.event_type == EVENT_ALARM_BUTTON_DOWN) {
-        _generate_room(state);
-        state->screen = (state->current_room == DNGN_ROOM_ENEMY)
-            ? DNGN_SCREEN_ENCOUNTER
-            : (state->current_room == DNGN_ROOM_LOOT)
-                ? DNGN_SCREEN_LOOT
-                : DNGN_SCREEN_STATUS;
+        _enter_random_room(state);
     } else {
         movement_default_loop_handler(event);
     }
@@ -433,8 +410,7 @@ static void _encounter_transition(movement_event_t event, void *context) {
                 
                 if (state->enemy_hp <= 0) {
                     printf("Floor %d. Enemy defeated!\n", state->floor);
-                    state->floor++;
-                    state->screen = DNGN_SCREEN_FLOOR_START;
+                    _enter_random_room(state);
                     break;
                 }
                 state->player_hp -= state->enemy_attack;
@@ -447,7 +423,7 @@ static void _encounter_transition(movement_event_t event, void *context) {
                 printf("Floor %d. Player drinks healing potion (+3). Player: %d HP\n", state->floor, state->player_hp);
             } else if (state->selected_action == DNGN_ACTION_RUN) {
                 state->player_hp -= 1;
-                state->screen = DNGN_SCREEN_FLOOR_START;
+                _enter_random_room(state);
                 break;
             }
 
@@ -484,8 +460,7 @@ static void _loot_transition(movement_event_t event, void *context) {
         } else if (state->found_item == DNGN_ITEM_POTION) {
             state->potions++;
         }
-        state->floor++;
-        dngn_start_animation(state, &DNGN_ANIM_DESCEND, DNGN_SCREEN_FLOOR_START);
+        _enter_random_room(state);
     } else {
         movement_default_loop_handler(event);
     }
@@ -497,15 +472,14 @@ static void _loot_display(movement_event_t event, void *context) {
     watch_clear_display();
     watch_display_text(WATCH_POSITION_TOP, "LOOT");
     watch_display_text(WATCH_POSITION_BOTTOM,
-        state->found_item == DNGN_ITEM_SWORD ? "SWD" : "POT");
+        state->found_item == DNGN_ITEM_SWORD ? "dagr" : "potn");
 }
 
 // ---------- STATUS ----------
 static void _status_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     if (event.event_type == EVENT_ALARM_BUTTON_DOWN) {
-        state->floor++;
-        state->screen = DNGN_SCREEN_FLOOR_START;
+        _enter_random_room(state);
     } else {
         movement_default_loop_handler(event);
     }
