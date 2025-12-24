@@ -161,8 +161,8 @@ const animation_def_t DNGN_ANIM_DESCEND = {
 
 // --- END animation definitions
 
-static void dngn_start_animation(dngn_state_t *state, const animation_def_t* anim_def) {
-    animation_start(&state->animation, anim_def, (void *) state);
+static void dngn_start_animation(dngn_state_t *state, const animation_def_t* anim_def, int8_t loop) {
+    animation_start(&state->animation, anim_def, (void *) state, loop);
     movement_request_tick_frequency(4);
 }
 
@@ -243,7 +243,7 @@ static void _generate_loot(dngn_state_t *state) {
 // sets state values for a new room of random type and sets the corresponding screen
 static void _enter_random_room(dngn_state_t *state) {
     // setup animation
-    dngn_start_animation(state, &DNGN_ANIM_DESCEND);
+    dngn_start_animation(state, &DNGN_ANIM_DESCEND, 1);
 
     // generate random room
     weighted_choice_t room_weights[][3] = {

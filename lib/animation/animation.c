@@ -3,13 +3,16 @@
 void animation_start(
     animation_state_t *anim,
     const animation_def_t *def,
-    void *context
+    void *context,
+    int8_t loop
 ) {
     anim->active = true;
     anim->current_frame = 0;
     anim->current_tick = 0;
+    anim->current_loop = 0;
     anim->def = def;
     anim->context = context;
+    anim->loop = loop;
 }
 
 void animation_stop(animation_state_t *anim) {
@@ -24,12 +27,25 @@ void animation_tick(animation_state_t *anim) {
     const animation_frame_t *frame =
         &anim->def->frames[anim->current_frame];
 
+    // after last tick in frame
     if (anim->current_tick >= frame->duration_ticks) {
         anim->current_tick = 0;
         anim->current_frame++;
-
+        // after last frame in animation
         if (anim->current_frame >= anim->def->frame_count) {
-            anim->active = false;
+            if(anim->loop >= 0) {
+                anim->current_loop++;
+            }
+
+            // after last finite loop iteration
+            if(anim->loop >= 0 && anim->current_loop >= anim->loop) {
+                anim->active = false;
+            } else {
+                // reset animation for next loop iteration
+                uint8_t cur = anim->current_loop;
+                animation_start(anim, anim->def, anim->context, anim->loop);
+                anim->current_loop = cur;
+            }
         }
     }
 }

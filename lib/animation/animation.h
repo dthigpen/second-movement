@@ -26,9 +26,11 @@ typedef struct {
  */
 typedef struct {
     bool active;
-
+    int8_t loop; // -1 for infinite, 0 for default 1 iteration, n > 0 for n iterations
+    
     uint8_t current_frame;
     uint8_t current_tick;
+    uint8_t current_loop;
 
     const animation_def_t *def;
     void *context;
@@ -38,7 +40,8 @@ typedef struct {
 void animation_start(
     animation_state_t *anim,
     const animation_def_t *def,
-    void *context
+    void *context,
+    int8_t loop
 );
 
 void animation_stop(animation_state_t *anim);
