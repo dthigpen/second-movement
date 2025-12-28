@@ -34,6 +34,7 @@ typedef enum {
 DNGN_SCREEN_TITLE = 0,
 DNGN_SCREEN_FLOOR_START,
 DNGN_SCREEN_ENCOUNTER,
+DNGN_SCREEN_ENCOUNTER_MENU,
 DNGN_SCREEN_LOOT,
 DNGN_SCREEN_STATUS,
 DNGN_SCREEN_GAME_OVER,
@@ -319,6 +320,7 @@ void dungeon_face_setup(uint8_t watch_face_index, void **context_ptr) {
         state->screens[DNGN_SCREEN_TITLE]       = (dngn_screen_def_t){ _title_transition, _title_display };
         state->screens[DNGN_SCREEN_FLOOR_START] = (dngn_screen_def_t){ _floor_transition, _floor_display };
         state->screens[DNGN_SCREEN_ENCOUNTER]   = (dngn_screen_def_t){ _encounter_transition, _encounter_display };
+        state->screens[DNGN_SCREEN_ENCOUNTER_MENU]   = (dngn_screen_def_t){ _encounter_menu_transition, _encounter_menu_display };
         state->screens[DNGN_SCREEN_LOOT]        = (dngn_screen_def_t){ _loot_transition, _loot_display };
         state->screens[DNGN_SCREEN_STATUS]      = (dngn_screen_def_t){ _status_transition, _status_display };
         state->screens[DNGN_SCREEN_GAME_OVER]   = (dngn_screen_def_t){ _game_over_transition, _game_over_display };
@@ -424,7 +426,7 @@ static void _floor_display(movement_event_t event, void *context) {
 }
 
 // ---------- ENCOUNTER ----------
-static void _encounter_transition(movement_event_t event, void *context) {
+static void _encounter_transition_orig(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
     switch (event.event_type) {
@@ -468,6 +470,17 @@ static void _encounter_transition(movement_event_t event, void *context) {
     }
 }
 
+static void _encounter_transition(movement_event_t event, void *context) {
+    dngn_state_t *state = (dngn_state_t *)context;
+
+    switch (event.event_type) {
+        case EVENT_ALARM_BUTTON_UP:
+            state->screen->DNGN_SCREEN_ENCOUNTER_MENU;
+        default:
+            movement_default_loop_handler(event);
+    }
+}
+
 static void _encounter_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
@@ -476,7 +489,41 @@ static void _encounter_display(movement_event_t event, void *context) {
     char buf[5]; // 4 chars + \0
     snprintf(buf, sizeof buf, "%-4d", (int)state->enemy_hp);
     watch_display_text(WATCH_POSITION_BOTTOM, buf);
-    // watch_display_float_with_best_effort(state->enemy_hp, NULL);
+    watch_display_text(WATCH_POSITION_SECONDS, "HP");
+}
+
+// ---------- ENCOUNTER MENU --------
+
+static void draw_encounter_menu_fight(void *context) {
+    watch_display_text(WATCH_POSITION_BOTTOM, "FItE");
+}
+
+static void draw_encounter_menu_heal(void *context) {
+    watch_display_text(WATCH_POSITION_BOTTOM, "HEAL");
+}
+
+static void draw_encounter_menu_run(void *context) {
+    watch_display_text(WATCH_POSITION_BOTTOM, "run");
+}
+
+static const menu_item_t run_item = {
+    .activate = NULL,
+    .deactivate = NULL,
+    .draw = draw_run,
+    .handle_event = NULL,
+    .ctx = NULL
+};
+static void _encounter_menu_transition(movement_event_t event, void *context) {
+    dngn_state_t *state = (dngn_state_t *)context;
+
+    
+}
+
+static void _encounter_menu_display(movement_event_t event, void *context) {
+    (void)event;
+    dngn_state_t *state = (dngn_state_t *)context;
+    watch_clear_display();
+    
 }
 
 // ---------- LOOT ----------
