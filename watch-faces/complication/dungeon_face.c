@@ -26,6 +26,7 @@
 #include "dungeon_face.h"
 #include "watch.h"
 #include "animation.h"
+#include "menu.h"
 
 
 // --- High-level screens / modes ---
