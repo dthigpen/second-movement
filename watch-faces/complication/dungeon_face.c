@@ -147,6 +147,21 @@ static void _draw_descend(uint8_t frame_index, void* context) {
     }
 }
 
+static bool skippable_anim(animation_state_t *anim, movement_event_t event, void *context) {
+    switch(event.event_type) {
+        case EVENT_ALARM_BUTTON_UP:
+            printf("Animation SKIPPED!\n");
+            animation_stop(anim);
+            return true;
+        case EVENT_MODE_BUTTON_UP:
+        case EVENT_LIGHT_BUTTON_DOWN:
+        case EVENT_LIGHT_BUTTON_UP:
+        case EVENT_MODE_LONG_PRESS:
+            movement_default_loop_handler(event);
+            return true;
+    }
+    return false;
+}
 static const animation_frame_t descend_frames[] = {
     { .duration_ticks = 2 },
     { .duration_ticks = 2 },
@@ -158,6 +173,7 @@ const animation_def_t DNGN_ANIM_DESCEND = {
     .frames = descend_frames,
     .frame_count = sizeof(descend_frames) / sizeof(descend_frames[0]),
     .draw_frame = _draw_descend,
+    .handle_event = skippable_anim
 };
 
 // --- END animation definitions
@@ -391,7 +407,7 @@ static void _title_display(movement_event_t event, void *context) {
 static void _floor_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
-    if (event.event_type == EVENT_ALARM_BUTTON_DOWN) {
+    if (event.event_type == EVENT_ALARM_BUTTON_UP) {
         _enter_random_room(state);
     } else {
         movement_default_loop_handler(event);
@@ -412,11 +428,11 @@ static void _encounter_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
     switch (event.event_type) {
-        case EVENT_LIGHT_BUTTON_DOWN:
+        case EVENT_LIGHT_BUTTON_UP:
             state->selected_action = (state->selected_action + 1) % DNGN_ACTION_COUNT;
             break;
 
-        case EVENT_ALARM_BUTTON_DOWN:
+        case EVENT_ALARM_BUTTON_UP:
             if (state->selected_action == DNGN_ACTION_FIGHT) {
                 printf("Floor %d. Player attacks enemy with %d ATK. Enemy: %d HP\n", state->floor, state->player_attack, state->enemy_hp);
                 state->enemy_hp -= state->player_attack;
@@ -467,7 +483,7 @@ static void _encounter_display(movement_event_t event, void *context) {
 static void _loot_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
-    if (event.event_type == EVENT_ALARM_BUTTON_DOWN) {
+    if (event.event_type == EVENT_ALARM_BUTTON_UP) {
         if (state->found_item == DNGN_ITEM_SWORD) {
             state->player_attack++;
         } else if (state->found_item == DNGN_ITEM_POTION) {
@@ -491,7 +507,7 @@ static void _loot_display(movement_event_t event, void *context) {
 // ---------- STATUS ----------
 static void _status_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
-    if (event.event_type == EVENT_ALARM_BUTTON_DOWN) {
+    if (event.event_type == EVENT_ALARM_BUTTON_UP) {
         _enter_random_room(state);
     } else {
         movement_default_loop_handler(event);
@@ -510,7 +526,7 @@ static void _status_display(movement_event_t event, void *context) {
 // ---------- GAME OVER ----------
 static void _game_over_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
-    if (event.event_type == EVENT_ALARM_BUTTON_DOWN) {
+    if (event.event_type == EVENT_ALARM_BUTTON_UP) {
         dungeon_face_activate(state);
     } else {
         movement_default_loop_handler(event);
