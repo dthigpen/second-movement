@@ -324,18 +324,30 @@ bool dungeon_face_loop(movement_event_t event, void *context) {
 
     // if(event.event_type != EVENT_TICK) printf("dungeon_face_loop screen=%d, last_screen=%d, event_type=%d, active=%d\n", state->screen, state->last_screen, event.event_type, state->active);
     
-    if(event.event_type == EVENT_TICK) {
-        animation_tick(&state->animation);
+    // --- Event handling (and state logic) ---
+    dngn_screen_def_t *screen = &state->screens[state->screen];
+    // allow animation to handle event first
+    // then screen state next
+    // TODO then default handler?
+    if (animation_handle_event(&state->animation, event, context)) {
+        // animation consumed it
+    } else {
+        /* 2. Current screen handles it */
+        screen->transition(event, state);
     }
 
-    dngn_screen_def_t *screen = &state->screens[state->screen];
-    screen->transition(event, state);
-
-    // only call screen draw if animation did not already draw
+    // --- Display ---
+    // allow animation to draw first
+    // if no animation drawn then screen state can draw
     if (!animation_draw(&state->animation)) {
         // screen may change during transition
         screen = &state->screens[state->screen];
         screen->display(event, state);
+    }
+
+    // increment animation state
+    if(event.event_type == EVENT_TICK) {
+        animation_tick(&state->animation);
     }
     return true;
 }

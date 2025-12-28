@@ -56,3 +56,15 @@ bool animation_draw(animation_state_t *anim) {
     anim->def->draw_frame(anim->current_frame, anim->context);
     return true;
 }
+
+bool animation_handle_event(
+    animation_state_t *anim,
+    movement_event_t event,
+    void *context
+) {
+    if (!anim->active || !anim->def || !anim->def->handle_event) {
+        return false;
+    }
+
+    return anim->def->handle_event(anim, event, context);
+}
