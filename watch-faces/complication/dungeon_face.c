@@ -28,6 +28,7 @@
 #include "animation.h"
 #include "menu.h"
 
+static uint8_t TICK_COUNT = 20;
 
 // --- High-level screens / modes ---
 typedef enum {
@@ -110,6 +111,9 @@ dngn_item_t found_item;
 
 // current animation
 animation_state_t animation;
+
+// ticks for thinks like flash or alternating text on the display
+uint8_t ticks;
 
 } dngn_state_t;
 
@@ -194,6 +198,9 @@ static void _floor_display(movement_event_t event, void *context);
 static void _encounter_transition(movement_event_t event, void *context);
 static void _encounter_display(movement_event_t event, void *context);
 
+static void _encounter_menu_transition(movement_event_t event, void *context);
+static void _encounter_menu_display(movement_event_t event, void *context);
+
 static void _loot_transition(movement_event_t event, void *context);
 static void _loot_display(movement_event_t event, void *context);
 
@@ -258,6 +265,35 @@ static void _generate_loot(dngn_state_t *state) {
     }
 }
 
+static bool is_player_dead(dngn_state_t *state) {
+    return state->player_hp <= 0;
+}
+
+static bool player_attack_enemy(dngn_state_t *state) {
+    // returns true if enemy was defeated
+    state->enemy_hp -= state->player_attack;
+    printf("Floor %d. Player attacks enemy with %d ATK. Enemy: %d HP\n", state->floor, state->player_attack, state->enemy_hp);
+    if (state->enemy_hp <= 0) {
+        printf("Floor %d. Enemy defeated!\n", state->floor);
+        return true;
+    }
+    return false;
+}
+static bool enemy_attack_player(dngn_state_t *state) {
+    // returns true if player was defeated
+    state->player_hp -= state->enemy_attack;
+    printf("Floor %d. Enemy attacks player with %d ATK. Player: %d HP\n", state->floor, state->enemy_attack, state->player_hp);
+    if (state->player_hp <= 0) {
+        printf("Floor %d. Player dies!\n", state->floor);
+        return true;
+    }
+    return false;
+}
+
+static void end_run(dngn_state_t *state) {
+    state->screen = DNGN_SCREEN_GAME_OVER;
+    state->active = false;
+}
 // sets state values for a new room of random type and sets the corresponding screen
 static void _enter_random_room(dngn_state_t *state) {
     // setup animation
@@ -368,6 +404,7 @@ bool dungeon_face_loop(movement_event_t event, void *context) {
     if(event.event_type == EVENT_TICK) {
         animation_tick(&state->animation);
     }
+    state->ticks = (state->ticks + 1) % TICK_COUNT;
     return true;
 }
 
@@ -475,7 +512,8 @@ static void _encounter_transition(movement_event_t event, void *context) {
 
     switch (event.event_type) {
         case EVENT_ALARM_BUTTON_UP:
-            state->screen->DNGN_SCREEN_ENCOUNTER_MENU;
+            state->screen = DNGN_SCREEN_ENCOUNTER_MENU;
+            printf("Going to encounter MENU\n");
         default:
             movement_default_loop_handler(event);
     }
@@ -484,38 +522,104 @@ static void _encounter_transition(movement_event_t event, void *context) {
 static void _encounter_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
-    watch_clear_display();
-    watch_display_text_with_fallback(WATCH_POSITION_TOP, "ENEMY", "EN");
-    char buf[5]; // 4 chars + \0
-    snprintf(buf, sizeof buf, "%-4d", (int)state->enemy_hp);
-    watch_display_text(WATCH_POSITION_BOTTOM, buf);
-    watch_display_text(WATCH_POSITION_SECONDS, "HP");
+    // Alternate between showing the enemy HP and your HP
+    if(state->ticks < 10) {
+        watch_clear_display();
+        watch_display_text_with_fallback(WATCH_POSITION_TOP, "ENEMY", "EN");
+        char buf[5]; // 4 chars + \0
+        snprintf(buf, sizeof buf, "%-4d", (int)state->enemy_hp);
+        watch_display_text(WATCH_POSITION_BOTTOM, buf);
+        watch_display_text(WATCH_POSITION_SECONDS, "HP");
+    } else if(state->ticks < 20 ) {
+        watch_clear_display();
+        watch_display_text_with_fallback(WATCH_POSITION_TOP, "PLYR", "PL");
+        char buf[5]; // 4 chars + \0
+        snprintf(buf, sizeof buf, "%-4d", (int)state->player_hp);
+        watch_display_text(WATCH_POSITION_BOTTOM, buf);
+        watch_display_text(WATCH_POSITION_SECONDS, "HP");
+    }
+
+    // TODO flash between Enemy HP and Player HP
 }
 
+static int calc_heal_amount(dngn_state_t *state) {
+    uint8_t floor = state->floor;
+    if (floor <= 10) {
+        return 3;
+    } else if (floor <= 20) {
+        return 6;
+    } else {
+        return 8;
+    }
+}
 // ---------- ENCOUNTER MENU --------
 
-static void draw_encounter_menu_fight(void *context) {
-    watch_display_text(WATCH_POSITION_BOTTOM, "FItE");
-}
-
-static void draw_encounter_menu_heal(void *context) {
-    watch_display_text(WATCH_POSITION_BOTTOM, "HEAL");
-}
-
-static void draw_encounter_menu_run(void *context) {
-    watch_display_text(WATCH_POSITION_BOTTOM, "run");
-}
-
-static const menu_item_t run_item = {
-    .activate = NULL,
-    .deactivate = NULL,
-    .draw = draw_run,
-    .handle_event = NULL,
-    .ctx = NULL
-};
 static void _encounter_menu_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
+    /*
+    FIGHT
+        Player attacks enemy with their weapon. Enemy HP - Player Weapon DMG
+        Enemy attacks player. Player - Enemy DMG
+    HEAL
+        Player uses 1 healing potion. Player HP + Healing Potion HP
+        Enemy attacks player. Player - Enemy DMG
+    RUN
+        Player attempts to flee.
+        50% Enemy attacks player. Player - Enemy DMG
+        50% Enemy misses player.
+    */
+    switch (event.event_type) {
+        case EVENT_LIGHT_BUTTON_UP:
+            state->selected_action = (state->selected_action + 1) % DNGN_ACTION_COUNT;
+            break;
+
+        case EVENT_ALARM_BUTTON_UP:
+            if (state->selected_action == DNGN_ACTION_FIGHT) {
+                if (player_attack_enemy(state)) {
+                    _enter_random_room(state);
+                    break;
+                }
+                if(enemy_attack_player(state)) {
+                    end_run(state);
+                    break;
+                }
+                // TODO play attack animation
+                // go back to enemy encounter screen
+                state->screen = DNGN_SCREEN_ENCOUNTER;
+            } else if (state->selected_action == DNGN_ACTION_HEAL && state->potions > 0) {
+                state->potions--;
+                const int heal_amount = calc_heal_amount(state);
+                state->player_hp = _clamp(state->player_hp + heal_amount, 0, state->player_max_hp);
+                printf("Floor %d. Player drinks healing potion (+%d). Player: %d HP\n", state->floor, heal_amount, state->player_hp);
+                // TODO play healing animation
+                // TODO show +X HP
+                state->player_hp -= state->enemy_attack;
+                printf("Floor %d. Enemy attacks player after healing with %d ATK. Player: %d HP\n", state->floor, state->enemy_attack, state->player_hp);
+                // TODO play attack animation
+                // go back to enemy encounter screen
+                state->screen = DNGN_SCREEN_ENCOUNTER;
+            } else if (state->selected_action == DNGN_ACTION_RUN) {
+                const int ATK = 0;
+                const int MISS = 1;
+                weighted_choice_t choices[] = {
+                    {50, ATK}, {50, MISS}
+                };
+                const int roll = weighted_roll(choices, sizeof choices);
+                if(roll == ATK) {
+                    if(enemy_attack_player(state)) {
+                        end_run(state);
+                        break;
+                    }
+                }
+                _enter_random_room(state);
+                break;
+            }
+            break;
+
+        default:
+            movement_default_loop_handler(event);
+    }
     
 }
 
@@ -523,6 +627,20 @@ static void _encounter_menu_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
     watch_clear_display();
+    // TODO show lap icon, indicating a menu (e.i looping options)
+    switch (state->selected_action) {
+        case DNGN_ACTION_FIGHT:
+            watch_display_text(WATCH_POSITION_BOTTOM, "FitE");
+            break;
+        case DNGN_ACTION_HEAL:
+            watch_display_text(WATCH_POSITION_BOTTOM, "HEAL");
+            break;
+        case DNGN_ACTION_RUN:
+            watch_display_text(WATCH_POSITION_BOTTOM, "run");
+            break;
+        default:
+            break;
+    }
     
 }
 
