@@ -32,7 +32,9 @@ static uint8_t TICK_COUNT = 20;
 
 // --- High-level screens / modes ---
 typedef enum {
-DNGN_SCREEN_TITLE = 0,
+DNGN_SCREEN_NONE = 0,
+DNGN_SCREEN_TITLE,
+DNGN_SCREEN_ANIM,
 DNGN_SCREEN_FLOOR_START,
 DNGN_SCREEN_ENCOUNTER,
 DNGN_SCREEN_ENCOUNTER_MENU,
@@ -41,6 +43,17 @@ DNGN_SCREEN_STATUS,
 DNGN_SCREEN_GAME_OVER,
 DNGN_SCREEN_COUNT
 } dngn_screen_t;
+
+
+typedef enum {
+    DNGN_OUTCOME_NONE = 0,
+    DNGN_OUTCOME_ENC_FIGHT,
+    DNGN_OUTCOME_ENC_HEAL_LIVE,
+    DNGN_OUTCOME_ENC_HEAL_DIE,
+    DNGN_OUTCOME_ENC_RUN_HIT_LIVE,
+    DNGN_OUTCOME_ENC_RUN_HIT_DIE,
+    DNGN_OUTCOME_ENC_RUN_MISS,
+} dngn_outcome_t;
 
 
 // --- Encounter types ---
@@ -83,6 +96,7 @@ typedef struct {
 // meta
 dngn_screen_t last_screen;
 dngn_screen_t screen;
+dngn_screen_t screen_after_anim;
 dngn_screen_def_t screens[DNGN_SCREEN_COUNT];
 
 // whether a run is currently in progress
@@ -114,6 +128,10 @@ animation_state_t animation;
 
 // ticks for thinks like flash or alternating text on the display
 uint8_t ticks;
+bool screen_changed;
+
+// outcome of each transition
+dngn_outcome_t pending_outcome;
 
 } dngn_state_t;
 
@@ -152,6 +170,18 @@ static void _draw_descend(uint8_t frame_index, void* context) {
     }
 }
 
+static bool unskippable_anim(animation_state_t *anim, movement_event_t event, void *context) {
+    switch(event.event_type) {
+        case EVENT_MODE_BUTTON_UP:
+        case EVENT_LIGHT_BUTTON_DOWN:
+        case EVENT_LIGHT_BUTTON_UP:
+        case EVENT_MODE_LONG_PRESS:
+            movement_default_loop_handler(event);
+            return true;
+    }
+    return false;
+}
+
 static bool skippable_anim(animation_state_t *anim, movement_event_t event, void *context) {
     switch(event.event_type) {
         case EVENT_ALARM_BUTTON_UP:
@@ -181,16 +211,70 @@ const animation_def_t DNGN_ANIM_DESCEND = {
     .handle_event = skippable_anim
 };
 
+static bool _handle_event_encounter_anim(animation_state_t *anim, movement_event_t event, void *context) {
+    dngn_state_t *state = (dngn_state_t *) context;
+    switch(event.event_type) {
+        case EVENT_ALARM_BUTTON_UP:
+            state->screen = DNGN_SCREEN_ENCOUNTER_MENU;
+            return true;
+        case EVENT_MODE_LONG_PRESS:
+            movement_default_loop_handler(event);
+            return true;
+    }
+    return false;
+}
+static void _draw_encounter(uint8_t frame_index, void* context) {
+    
+    dngn_state_t *state = (dngn_state_t *) context;
+    char buf[5]; // 4 chars + \0
+    switch(frame_index) {
+        case 0:
+            watch_clear_display();
+            watch_display_text_with_fallback(WATCH_POSITION_TOP, "ENEMY", "EN");
+            snprintf(buf, sizeof buf, "%4d", (int)state->enemy_hp);
+            watch_display_text(WATCH_POSITION_BOTTOM, buf);
+            watch_display_text(WATCH_POSITION_SECONDS, "HP");
+            break;
+        case 1:
+            watch_clear_display();
+            watch_display_text_with_fallback(WATCH_POSITION_TOP, "PLyr", "PL");
+            snprintf(buf, sizeof buf, "%4d", (int)state->player_hp);
+            watch_display_text(WATCH_POSITION_BOTTOM, buf);
+            watch_display_text(WATCH_POSITION_SECONDS, "HP");
+            break;
+    }
+}
+static const animation_frame_t encounter_frames[] = {
+    { .duration_ticks = 8 },
+    { .duration_ticks = 8 },
+};
+
+const animation_def_t DNGN_ANIM_ENCOUNTER = {
+    .frames = encounter_frames,
+    .frame_count = sizeof(encounter_frames) / sizeof(encounter_frames[0]),
+    .draw_frame = _draw_encounter,
+    .handle_event = unskippable_anim
+};
+
 // --- END animation definitions
 
 static void dngn_start_animation(dngn_state_t *state, const animation_def_t* anim_def, int8_t loop) {
     animation_start(&state->animation, anim_def, (void *) state, loop);
-    movement_request_tick_frequency(4);
+    movement_request_tick_frequency(8);
+}
+
+static void dngn_start_animation_before_screen(dngn_state_t *state, const animation_def_t* anim_def, int8_t loop, dngn_screen_t next_screen) {
+    animation_start(&state->animation, anim_def, (void *) state, loop);
+    state->screen = DNGN_SCREEN_ANIM;
+    movement_request_tick_frequency(8);
 }
 
 // ---------- forward declarations ----------
 static void _title_transition(movement_event_t event, void *context);
 static void _title_display(movement_event_t event, void *context);
+
+static void _anim_transition(movement_event_t event, void *context);
+static void _anim_display(movement_event_t event, void *context);
 
 static void _floor_transition(movement_event_t event, void *context);
 static void _floor_display(movement_event_t event, void *context);
@@ -354,6 +438,7 @@ void dungeon_face_setup(uint8_t watch_face_index, void **context_ptr) {
 
         // wire screens
         state->screens[DNGN_SCREEN_TITLE]       = (dngn_screen_def_t){ _title_transition, _title_display };
+        state->screens[DNGN_SCREEN_ANIM]       = (dngn_screen_def_t){ _anim_transition, _anim_display };
         state->screens[DNGN_SCREEN_FLOOR_START] = (dngn_screen_def_t){ _floor_transition, _floor_display };
         state->screens[DNGN_SCREEN_ENCOUNTER]   = (dngn_screen_def_t){ _encounter_transition, _encounter_display };
         state->screens[DNGN_SCREEN_ENCOUNTER_MENU]   = (dngn_screen_def_t){ _encounter_menu_transition, _encounter_menu_display };
@@ -365,7 +450,8 @@ void dungeon_face_setup(uint8_t watch_face_index, void **context_ptr) {
 
 void dungeon_face_activate(void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
-    printf("dungeon_face_activate OLD_STATE screen=%d\n", state->screen);
+    // save off current screen
+    // set to title screen and offer continue/reset
     if(state->screen != DNGN_SCREEN_TITLE) {
         state->last_screen = state->screen;
         printf("Last screen was: %d\n", state->last_screen);
@@ -383,12 +469,15 @@ bool dungeon_face_loop(movement_event_t event, void *context) {
     dngn_screen_def_t *screen = &state->screens[state->screen];
     // allow animation to handle event first
     // then screen state next
-    // TODO then default handler?
     if (animation_handle_event(&state->animation, event, context)) {
         // animation consumed it
     } else {
-        /* 2. Current screen handles it */
+        // Call this screen's transition function
+        // and set a flag if the screen has changed during it
+        dngn_screen_t last_screen = state->screen;
         screen->transition(event, state);
+        dngn_screen_t new_screen = state->screen;
+        state->screen_changed = last_screen != new_screen;
     }
 
     // --- Display ---
@@ -404,7 +493,6 @@ bool dungeon_face_loop(movement_event_t event, void *context) {
     if(event.event_type == EVENT_TICK) {
         animation_tick(&state->animation);
     }
-    state->ticks = (state->ticks + 1) % TICK_COUNT;
     return true;
 }
 
@@ -440,6 +528,19 @@ static void _title_display(movement_event_t event, void *context) {
     } else {
         watch_display_text(WATCH_POSITION_BOTTOM, "START");
     }
+}
+
+// ---------- ANIM ----------
+static void _anim_transition(movement_event_t event, void *context) {
+    dngn_state_t *state = (dngn_state_t *)context;
+    // when animation is finished move to the next state
+    if(!state->animation.active && state->screen_after_anim != DNGN_SCREEN_NONE) {
+        state->screen = state->screen_after_anim;
+        state->screen_after_anim = DNGN_SCREEN_NONE;
+    }
+}
+static void _anim_display(movement_event_t event, void *context) {
+    // nothing to display, animation should be playing
 }
 
 // ---------- FLOOR START ----------
@@ -507,11 +608,17 @@ static void _encounter_transition_orig(movement_event_t event, void *context) {
     }
 }
 
+
 static void _encounter_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
+    if(!state->animation.active) {
+        printf("Starting encounter anim\n");
+        dngn_start_animation(state, &DNGN_ANIM_ENCOUNTER, 1);
+    }
 
     switch (event.event_type) {
         case EVENT_ALARM_BUTTON_UP:
+            animation_stop(&state->animation);
             state->screen = DNGN_SCREEN_ENCOUNTER_MENU;
             printf("Going to encounter MENU\n");
         default:
@@ -522,24 +629,7 @@ static void _encounter_transition(movement_event_t event, void *context) {
 static void _encounter_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
-    // Alternate between showing the enemy HP and your HP
-    if(state->ticks < 10) {
-        watch_clear_display();
-        watch_display_text_with_fallback(WATCH_POSITION_TOP, "ENEMY", "EN");
-        char buf[5]; // 4 chars + \0
-        snprintf(buf, sizeof buf, "%-4d", (int)state->enemy_hp);
-        watch_display_text(WATCH_POSITION_BOTTOM, buf);
-        watch_display_text(WATCH_POSITION_SECONDS, "HP");
-    } else if(state->ticks < 20 ) {
-        watch_clear_display();
-        watch_display_text_with_fallback(WATCH_POSITION_TOP, "PLYR", "PL");
-        char buf[5]; // 4 chars + \0
-        snprintf(buf, sizeof buf, "%-4d", (int)state->player_hp);
-        watch_display_text(WATCH_POSITION_BOTTOM, buf);
-        watch_display_text(WATCH_POSITION_SECONDS, "HP");
-    }
-
-    // TODO flash between Enemy HP and Player HP
+    // taken care of by animation
 }
 
 static int calc_heal_amount(dngn_state_t *state) {
@@ -557,6 +647,12 @@ static int calc_heal_amount(dngn_state_t *state) {
 static void _encounter_menu_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
+    if(state->screen_changed) {
+        state->ticks = 0;
+    } else {
+        state->ticks = (state->ticks + 1) % TICK_COUNT;
+    }
+
     /*
     FIGHT
         Player attacks enemy with their weapon. Enemy HP - Player Weapon DMG
@@ -571,6 +667,8 @@ static void _encounter_menu_transition(movement_event_t event, void *context) {
     */
     switch (event.event_type) {
         case EVENT_LIGHT_BUTTON_UP:
+            // switch to the next menu item and reset ticks for it
+            state->ticks = 0;
             state->selected_action = (state->selected_action + 1) % DNGN_ACTION_COUNT;
             break;
 
@@ -600,6 +698,7 @@ static void _encounter_menu_transition(movement_event_t event, void *context) {
                 // go back to enemy encounter screen
                 state->screen = DNGN_SCREEN_ENCOUNTER;
             } else if (state->selected_action == DNGN_ACTION_RUN) {
+                // TODO show anim for - X HP and MISS
                 const int ATK = 0;
                 const int MISS = 1;
                 weighted_choice_t choices[] = {
@@ -626,14 +725,29 @@ static void _encounter_menu_transition(movement_event_t event, void *context) {
 static void _encounter_menu_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
+    char buf[5];
     watch_clear_display();
+    watch_set_indicator(WATCH_INDICATOR_LAP);
     // TODO show lap icon, indicating a menu (e.i looping options)
     switch (state->selected_action) {
         case DNGN_ACTION_FIGHT:
-            watch_display_text(WATCH_POSITION_BOTTOM, "FitE");
+            if (state->ticks < TICK_COUNT / 2) {
+                watch_display_text(WATCH_POSITION_BOTTOM, "FitE");
+            } else {
+                snprintf(buf, sizeof buf, "%4d", (int)state->player_attack);
+                watch_display_text(WATCH_POSITION_BOTTOM, buf);
+                watch_display_text(WATCH_POSITION_SECONDS, "Pt");
+            }
             break;
         case DNGN_ACTION_HEAL:
-            watch_display_text(WATCH_POSITION_BOTTOM, "HEAL");
+            if (state->ticks < TICK_COUNT / 2) {
+                watch_display_text(WATCH_POSITION_BOTTOM, "HEAL");
+            } else {
+                snprintf(buf, sizeof buf, "%4d", DNGN_HEALING_POTION_HP);
+                watch_display_text(WATCH_POSITION_BOTTOM, buf);
+                watch_display_text(WATCH_POSITION_SECONDS, "HP");
+            }
+            break;
             break;
         case DNGN_ACTION_RUN:
             watch_display_text(WATCH_POSITION_BOTTOM, "run");
