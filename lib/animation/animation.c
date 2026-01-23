@@ -48,6 +48,7 @@ void animation_tick(animation_state_t *anim) {
             }
         }
     }
+    printf("animation_tick active=%d tick=%d/%d frame=%d/%d iter=%d/%d\n",anim->active, anim->current_tick, frame->duration_ticks, anim->current_frame, anim->def->frame_count, anim->current_loop, anim->loop);
 }
 
 bool animation_draw(animation_state_t *anim) {
