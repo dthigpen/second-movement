@@ -67,6 +67,7 @@ typedef enum {
 DNGN_ITEM_NONE = 0,
 DNGN_ITEM_WEAPON,
 DNGN_ITEM_POTION,
+// DNGN_ITEM_SHIELD, // TODO
 DNGN_ITEM_MAX_HP_UP
 } dngn_item_type_t;
 
@@ -79,6 +80,15 @@ typedef struct {
     bool is_boss;
     uint8_t gold;
 } dngn_enemy_t;
+
+typedef struct {
+    int8_t hp;
+    int8_t max_hp;
+    uint8_t damage;
+    uint8_t gold;
+    uint8_t potions;
+    bool has_shield;
+} dngn_player_t;
 
 typedef struct {
     dngn_item_type_t type;
@@ -121,12 +131,8 @@ dngn_room_type_t current_room;
 
 
 // player stats
-int8_t player_hp;
-int8_t player_max_hp;
-int8_t player_attack;
-uint8_t potions;
-uint8_t score;
-
+// uint8_t score;
+dngn_player_t player;
 
 // enemy stats (only valid during encounter)
 dngn_enemy_t enemy;
@@ -246,7 +252,7 @@ static void _draw_encounter(uint8_t frame_index, void* context) {
         case 1:
             watch_clear_display();
             watch_display_text_with_fallback(WATCH_POSITION_TOP, "PLyr", "PL");
-            snprintf(buf, sizeof buf, "%4d", (int)state->player_hp);
+            snprintf(buf, sizeof buf, "%4d", (int)state->player.hp);
             watch_display_text(WATCH_POSITION_BOTTOM, buf);
             watch_display_text(WATCH_POSITION_SECONDS, "HP");
             break;
@@ -394,7 +400,7 @@ dngn_item_t dngn_generate_loot(const dngn_state_t *state) {
 
     uint8_t roll = rand() % 100;
 
-    bool can_get_potion = state->potions < DNGN_MAX_POTIONS;
+    bool can_get_potion = state->player.potions < DNGN_MAX_POTIONS;
     if (can_get_potion && roll < 40) {
         loot.type = DNGN_ITEM_POTION;
         loot.value = dngn_potion_heal_amount(state);
@@ -421,7 +427,7 @@ uint8_t dngn_potion_heal_amount(const dngn_state_t *state) {
     uint8_t heal = 2;
 
     if (state->floor > 10) heal = 3;
-    if (heal > state->player_max_hp) heal = state->player_max_hp;
+    if (heal > state->player.max_hp) heal = state->player.max_hp;
 
     return heal;
 }
@@ -431,7 +437,8 @@ uint8_t dngn_score_for_floor(const dngn_state_t *state) {
 }
 
 uint8_t dngn_score_for_enemy(const dngn_enemy_t *enemy) {
-    return enemy->is_boss ? 12 : 6;
+    // return enemy->is_boss ? 12 : 6;
+    return enemy->gold;
 }
 
 
@@ -442,25 +449,25 @@ static uint8_t _clamp(uint8_t value, uint8_t value_min, uint8_t value_max) {
 }
 
 static bool is_player_dead(dngn_state_t *state) {
-    return state->player_hp <= 0;
+    return state->player.hp <= 0;
 }
 
 static bool player_attack_enemy(dngn_state_t *state) {
     // returns true if enemy was defeated
-    state->enemy.hp -= state->player_attack;
-    printf("Floor %d. Player attacks enemy with %d ATK. Enemy: %d HP\n", state->floor, state->player_attack, state->enemy.hp);
+    state->enemy.hp -= state->player.damage;
+    printf("Floor %d. Player attacks enemy with %d ATK. Enemy: %d HP\n", state->floor, state->player.damage, state->enemy.hp);
     if (state->enemy.hp <= 0) {
         printf("Floor %d. Enemy defeated!\n", state->floor);
-        state->score += dngn_score_for_enemy(&state->enemy);
+        state->player.gold += dngn_score_for_enemy(&state->enemy);
         return true;
     }
     return false;
 }
 static bool enemy_attack_player(dngn_state_t *state) {
     // returns true if player was defeated
-    state->player_hp -= state->enemy.damage;
-    printf("Floor %d. Enemy attacks player with %d ATK. Player: %d HP\n", state->floor, state->enemy.damage, state->player_hp);
-    if (state->player_hp <= 0) {
+    state->player.hp -= state->enemy.damage;
+    printf("Floor %d. Enemy attacks player with %d ATK. Player: %d HP\n", state->floor, state->enemy.damage, state->player.hp);
+    if (state->player.hp <= 0) {
         printf("Floor %d. Player dies!\n", state->floor);
         return true;
     }
@@ -477,7 +484,7 @@ static void _enter_random_room(dngn_state_t *state) {
     dngn_start_animation(state, &DNGN_ANIM_DESCEND, 1);
 
     uint8_t cleared_floor_score = dngn_score_for_floor(state);
-    state->score += cleared_floor_score;
+    state->player.gold += cleared_floor_score;
 
     // generate random room
     weighted_choice_t room_weights[][3] = {
@@ -516,10 +523,12 @@ static void _enter_random_room(dngn_state_t *state) {
 
 static void reset_player_state(dngn_state_t* state) {
     state->floor = 0;
-    state->player_max_hp = 10;
-    state->player_hp = 10;
-    state->player_attack = 2;
-    state->potions = 0;
+    // state->player = {0};
+    state->player.max_hp = 10;
+    state->player.hp = 10;
+    state->player.damage = 2;
+    state->player.potions = 0;
+    state->player.gold = 0;
 }
 
 // ---------- TITLE ----------
@@ -599,29 +608,29 @@ static void _encounter_transition_orig(movement_event_t event, void *context) {
 
         case EVENT_ALARM_BUTTON_UP:
             if (state->selected_action == DNGN_ACTION_FIGHT) {
-                printf("Floor %d. Player attacks enemy with %d ATK. Enemy: %d HP\n", state->floor, state->player_attack, state->enemy.hp);
-                state->enemy.hp -= state->player_attack;
+                printf("Floor %d. Player attacks enemy with %d ATK. Enemy: %d HP\n", state->floor, state->player.damage, state->enemy.hp);
+                state->enemy.hp -= state->player.damage;
                 
                 if (state->enemy.hp <= 0) {
                     printf("Floor %d. Enemy defeated!\n", state->floor);
                     _enter_random_room(state);
                     break;
                 }
-                state->player_hp -= state->enemy.damage;
-                printf("Floor %d. Enemy attacks player with %d ATK. Player: %d HP\n", state->floor, state->enemy.damage, state->player_hp);
-            } else if (state->selected_action == DNGN_ACTION_HEAL && state->potions > 0) {
-                state->potions--;
-                state->player_hp += DNGN_HEALING_POTION_HP;
-                if (state->player_hp > state->player_max_hp)
-                    state->player_hp = state->player_max_hp;
-                printf("Floor %d. Player drinks healing potion (+3). Player: %d HP\n", state->floor, state->player_hp);
+                state->player.hp -= state->enemy.damage;
+                printf("Floor %d. Enemy attacks player with %d ATK. Player: %d HP\n", state->floor, state->enemy.damage, state->player.hp);
+            } else if (state->selected_action == DNGN_ACTION_HEAL && state->player.potions > 0) {
+                state->player.potions--;
+                state->player.hp += DNGN_HEALING_POTION_HP;
+                if (state->player.hp > state->player.max_hp)
+                    state->player.hp = state->player.max_hp;
+                printf("Floor %d. Player drinks healing potion (+3). Player: %d HP\n", state->floor, state->player.hp);
             } else if (state->selected_action == DNGN_ACTION_RUN) {
-                state->player_hp -= 1;
+                state->player.hp -= 1;
                 _enter_random_room(state);
                 break;
             }
 
-            if (state->player_hp <= 0) {
+            if (state->player.hp <= 0) {
                 state->screen = DNGN_SCREEN_GAME_OVER;
                 state->active = false;
                 printf("Floor %d. Player dies!\n", state->floor);
@@ -710,15 +719,15 @@ static void _encounter_menu_transition(movement_event_t event, void *context) {
                 // TODO play attack animation
                 // go back to enemy encounter screen
                 state->screen = DNGN_SCREEN_ENCOUNTER;
-            } else if (state->selected_action == DNGN_ACTION_HEAL && state->potions > 0) {
-                state->potions--;
+            } else if (state->selected_action == DNGN_ACTION_HEAL && state->player.potions > 0) {
+                state->player.potions--;
                 const int heal_amount = calc_heal_amount(state);
-                state->player_hp = _clamp(state->player_hp + heal_amount, 0, state->player_max_hp);
-                printf("Floor %d. Player drinks healing potion (+%d). Player: %d HP\n", state->floor, heal_amount, state->player_hp);
+                state->player.hp = _clamp(state->player.hp + heal_amount, 0, state->player.max_hp);
+                printf("Floor %d. Player drinks healing potion (+%d). Player: %d HP\n", state->floor, heal_amount, state->player.hp);
                 // TODO play healing animation
                 // TODO show +X HP
-                // state->player_hp -= state->enemy.damage;
-                printf("Floor %d. Enemy attacks player after healing with %d ATK. Player: %d HP\n", state->floor, state->enemy.damage, state->player_hp);
+                // state->player.hp -= state->enemy.damage;
+                printf("Floor %d. Enemy attacks player after healing with %d ATK. Player: %d HP\n", state->floor, state->enemy.damage, state->player.hp);
                 if(enemy_attack_player(state)) {
                     end_run(state);
                     break;
@@ -739,7 +748,7 @@ static void _encounter_menu_transition(movement_event_t event, void *context) {
             }
             // if an action was taken, reset to the first menu item: fight
             // unless they tried to select heal when they had no healing potions
-            const bool failed_heal = state->selected_action == DNGN_ACTION_HEAL && state->potions == 0;
+            const bool failed_heal = state->selected_action == DNGN_ACTION_HEAL && state->player.potions == 0;
             if(!failed_heal) {
                 state->selected_action = DNGN_ACTION_FIGHT;
             }
@@ -763,7 +772,7 @@ static void _encounter_menu_display(movement_event_t event, void *context) {
             if (state->ticks < TICK_COUNT / 2) {
                 watch_display_text(WATCH_POSITION_BOTTOM, "FitE");
             } else {
-                snprintf(buf, sizeof buf, "%4d", (int)state->player_attack);
+                snprintf(buf, sizeof buf, "%4d", (int)state->player.damage);
                 watch_display_text(WATCH_POSITION_BOTTOM, buf);
                 watch_display_text(WATCH_POSITION_SECONDS, "Pt");
             }
@@ -778,7 +787,7 @@ static void _encounter_menu_display(movement_event_t event, void *context) {
                 watch_display_text(WATCH_POSITION_BOTTOM, buf);
                 watch_display_text(WATCH_POSITION_SECONDS, "HP");
                 // print num potions left
-                snprintf(buf, sizeof buf, "%2d", (int)state->potions);
+                snprintf(buf, sizeof buf, "%2d", (int)state->player.potions);
                 watch_display_text(WATCH_POSITION_TOP_RIGHT, buf);
 
 
@@ -802,11 +811,11 @@ static void _loot_transition(movement_event_t event, void *context) {
     // apply item effects on button press, then enter another room
     if (event.event_type == EVENT_ALARM_BUTTON_UP) {
         if (state->found_item.type == DNGN_ITEM_WEAPON) {
-            state->player_attack += state->found_item.value;
+            state->player.damage += state->found_item.value;
         } else if (state->found_item.type == DNGN_ITEM_POTION) {
-            state->potions++;
+            state->player.potions++;
         } else if (state->found_item.type == DNGN_ITEM_MAX_HP_UP) {
-            state->player_hp += state->found_item.value;
+            state->player.hp += state->found_item.value;
         } else {
             printf("ERROR: _loot_transition Unhandled loot type: %d\n", state->found_item.type);
         }
@@ -855,26 +864,59 @@ static void _status_display(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     watch_clear_display();
     watch_display_text(WATCH_POSITION_TOP, "HP");
-    // watch_display_number(WATCH_POSITION_BOTTOM, state->player_hp);
-    watch_display_float_with_best_effort(state->player_hp, NULL);
+    // watch_display_number(WATCH_POSITION_BOTTOM, state->player.hp);
+    watch_display_float_with_best_effort(state->player.hp, NULL);
 }
 
 // ---------- GAME OVER ----------
 static void _game_over_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
-    if (event.event_type == EVENT_ALARM_BUTTON_UP) {
-        dungeon_face_activate(state);
+    const int total_ticks = 30;
+    if(state->screen_changed) {
+        state->ticks = 0;
     } else {
-        movement_default_loop_handler(event);
+        state->ticks = (state->ticks + 1) % total_ticks; // 3 frames, 10 ticks each
+    }
+    switch (event.event_type)
+    {
+    case EVENT_ALARM_BUTTON_UP:
+        state->screen = DNGN_SCREEN_TITLE;
+        break;
+    default:
+        default_button_handler(event);
     }
 }
 
 static void _game_over_display(movement_event_t event, void *context) {
-    (void)event;
-    (void)context;
-    watch_clear_display();
-    watch_display_text(WATCH_POSITION_TOP, "U");
-    watch_display_text(WATCH_POSITION_BOTTOM, "died");
+    dngn_state_t *state = (dngn_state_t *)context;
+    const int total_ticks = 30;
+    const int total_frames = 3;
+    const int ticks_per_frame = total_ticks / total_frames;
+    const int frame = state->ticks / ticks_per_frame;
+    char buf[5]; // 4 chars + \0
+    switch (frame)
+    {
+    case 0:
+        watch_clear_display();
+        watch_display_text(WATCH_POSITION_TOP, "U");
+        watch_display_text(WATCH_POSITION_BOTTOM, "died");
+        break;
+    case 1:
+        watch_clear_display();
+        watch_display_text_with_fallback(WATCH_POSITION_TOP, "Flr", "Fl");
+        snprintf(buf, sizeof buf, "%4d", (int)state->floor);
+        watch_display_text(WATCH_POSITION_BOTTOM, buf);
+        break;
+    case 2:
+        watch_clear_display();
+        watch_display_text_with_fallback(WATCH_POSITION_TOP, "gld", "gl");
+        snprintf(buf, sizeof buf, "%4d", (int)state->player.gold);
+        watch_display_text(WATCH_POSITION_BOTTOM, buf);
+        break;
+    default:
+        printf("ERROR: _game_over_display unhandled frame index: %d\n", frame);
+        break;
+    }
 }
 
 static void _descend_transition(movement_event_t event, void *context) {
@@ -893,7 +935,7 @@ static void _run_away_transition(movement_event_t event, void *context) {
             dngn_start_animation(state, &DNGN_ANIM_RUN_AWAY, 2);
         }
     }        
-    if(state->player_hp <= 0) {
+    if(state->player.hp <= 0) {
         state->screen = DNGN_SCREEN_GAME_OVER;
     } else {
         state->screen = DNGN_SCREEN_DESCEND;
