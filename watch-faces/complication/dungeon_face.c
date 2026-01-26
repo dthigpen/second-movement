@@ -150,7 +150,9 @@ dngn_item_t found_item;
 animation_state_t animation;
 
 // ticks for thinks like flash or alternating text on the display
-uint8_t ticks;
+uint8_t total_frames;
+uint8_t ticks_per_frame;
+uint8_t current_tick;
 bool screen_changed;
 
 dngn_outcome_event_t outcome;
@@ -325,6 +327,7 @@ static void anim_transition(movement_event_t event, void *context);
 static void anim_display(movement_event_t event, void *context);
 
 static void descend_transition(movement_event_t event, void *context);
+static void descend_display(movement_event_t event, void *context);
 
 static void run_away_transition(movement_event_t event, void *context);
 
@@ -356,7 +359,8 @@ static uint8_t potion_heal_amount(const dngn_state_t *state);
 static void apply_rewards_for_clearing_floor(dngn_state_t *state);
 static uint8_t weighted_roll(weighted_choice_t *choices, uint8_t count);
 static dngn_item_t generate_loot(const dngn_state_t *state);
-
+static void start_or_tick_animation(dngn_state_t *state, uint8_t total_frames, uint8_t ticks_per_frame);
+static uint8_t get_current_frame(dngn_state_t *state);
 
 
 // ---------- helpers ----------
@@ -541,6 +545,18 @@ static void enter_random_room(dngn_state_t *state) {
     }
 }
 
+static uint8_t get_current_frame(dngn_state_t *state) {
+    return state->current_tick / state->ticks_per_frame;
+}
+static void start_or_tick_animation(dngn_state_t *state, uint8_t total_frames, uint8_t ticks_per_frame) {
+    if(state->screen_changed) {
+        state->current_tick = 0;
+        state->ticks_per_frame = ticks_per_frame;
+        state->total_frames = total_frames;
+    } else {
+        state->current_tick = (state->current_tick + 1) % (state->total_frames * state->ticks_per_frame);
+    }
+}
 
 static void reset_player_state(dngn_state_t* state) {
     state->floor = 0;
@@ -658,12 +674,7 @@ static int calc_heal_amount(dngn_state_t *state) {
 static void encounter_menu_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
-    if(state->screen_changed) {
-        state->ticks = 0;
-    } else {
-        state->ticks = (state->ticks + 1) % TICK_COUNT;
-    }
-
+    start_or_tick_animation(state, 2, 10);
     /*
     FIGHT
         Player attacks enemy with their weapon. Enemy HP - Player Weapon DMG
@@ -679,7 +690,7 @@ static void encounter_menu_transition(movement_event_t event, void *context) {
     switch (event.event_type) {
         case EVENT_LIGHT_BUTTON_UP:
             // switch to the next menu item and reset ticks for it
-            state->ticks = 0;
+            state->current_tick = 0;
             bool invalid_choice = true;
             // select next valid item in enum. E.g. only show Heal option if player has potions
             do {
@@ -754,9 +765,10 @@ static void encounter_menu_display(movement_event_t event, void *context) {
     watch_clear_display();
     watch_set_indicator(WATCH_INDICATOR_LAP);
     // TODO show lap icon, indicating a menu (e.i looping options)
+    const uint8_t current_frame = get_current_frame(state);
     switch (state->selected_action) {
         case DNGN_ACTION_FIGHT:
-            if (state->ticks < TICK_COUNT / 2) {
+            if (current_frame == 0) {
                 watch_display_text(WATCH_POSITION_BOTTOM, "FitE");
             } else {
                 snprintf(buf, sizeof buf, "%4d", (int)state->player.damage);
@@ -765,7 +777,7 @@ static void encounter_menu_display(movement_event_t event, void *context) {
             }
             break;
         case DNGN_ACTION_HEAL:
-            if (state->ticks < TICK_COUNT / 2) {
+            if (current_frame == 0) {
                 watch_display_text(WATCH_POSITION_BOTTOM, "HEAL");
             } else {
                 uint8_t heal_amount = potion_heal_amount(state);
@@ -902,11 +914,7 @@ static void empty_room_display(movement_event_t event, void *context) {
 static void game_over_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     const int total_ticks = 30;
-    if(state->screen_changed) {
-        state->ticks = 0;
-    } else {
-        state->ticks = (state->ticks + 1) % total_ticks; // 3 frames, 10 ticks each
-    }
+    start_or_tick_animation(state, 3, 10);
     switch (event.event_type)
     {
     case EVENT_ALARM_BUTTON_UP:
@@ -919,10 +927,7 @@ static void game_over_transition(movement_event_t event, void *context) {
 
 static void game_over_display(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
-    const int total_ticks = 30;
-    const int total_frames = 3;
-    const int ticks_per_frame = total_ticks / total_frames;
-    const int frame = state->ticks / ticks_per_frame;
+    const int frame = get_current_frame(state);
     char buf[5]; // 4 chars + \0
     switch (frame)
     {
@@ -952,10 +957,15 @@ static void game_over_display(movement_event_t event, void *context) {
 static void descend_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     // when current animation is finished, play floor descend animation and roll next room
+    // TODO how to handle this without animation api?
     if(!state->animation.active) {
         dngn_start_animation(state, &DNGN_ANIM_DESCEND, 1);
         enter_random_room(state);
     }
+}
+
+static void descend_display(movement_event_t event, void *context) {
+    dngn_state_t *state = (dngn_state_t *)context;
 }
 
 static void run_away_transition(movement_event_t event, void *context) {
@@ -982,7 +992,7 @@ void dungeon_face_setup(uint8_t watch_face_index, void **context_ptr) {
 
         // wire screens
         state->screens[DNGN_SCREEN_TITLE]       = (dngn_screen_def_t){ title_transition, title_display };
-        state->screens[DNGN_SCREEN_DESCEND]       = (dngn_screen_def_t){ descend_transition, no_op };
+        state->screens[DNGN_SCREEN_DESCEND]       = (dngn_screen_def_t){ descend_transition, descend_display };
         state->screens[DNGN_SCREEN_RUN_AWAY]       = (dngn_screen_def_t){ run_away_transition, no_op };
         state->screens[DNGN_SCREEN_ANIM]       = (dngn_screen_def_t){ anim_transition, anim_display };
         state->screens[DNGN_SCREEN_ENCOUNTER]   = (dngn_screen_def_t){ encounter_transition, encounter_display };
@@ -1036,6 +1046,7 @@ bool dungeon_face_loop(movement_event_t event, void *context) {
     // increment animation state
     if(event.event_type == EVENT_TICK) {
         animation_tick(&state->animation);
+        // start_or_tick_animation(state);
     }
     return true;
 }
