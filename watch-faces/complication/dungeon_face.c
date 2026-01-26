@@ -202,7 +202,7 @@ static bool skippable_anim(animation_state_t *anim, movement_event_t event, void
 
 // Descend animation
 
-static void _draw_descend(uint8_t frame_index, void* context) {
+static void draw_descend(uint8_t frame_index, void* context) {
     
     dngn_state_t *state = (dngn_state_t *) context;
     char buf[3]; // 2 chars + \0
@@ -237,13 +237,13 @@ static const animation_frame_t descend_frames[] = {
 const animation_def_t DNGN_ANIM_DESCEND = {
     .frames = descend_frames,
     .frame_count = sizeof(descend_frames) / sizeof(descend_frames[0]),
-    .draw_frame = _draw_descend,
+    .draw_frame = draw_descend,
     .handle_event = skippable_anim
 };
 
 // Encounter animation
 
-static void _draw_encounter(uint8_t frame_index, void* context) {
+static void draw_encounter(uint8_t frame_index, void* context) {
     
     dngn_state_t *state = (dngn_state_t *) context;
     char buf[5]; // 4 chars + \0
@@ -272,13 +272,13 @@ static const animation_frame_t encounter_frames[] = {
 const animation_def_t DNGN_ANIM_ENCOUNTER = {
     .frames = encounter_frames,
     .frame_count = sizeof(encounter_frames) / sizeof(encounter_frames[0]),
-    .draw_frame = _draw_encounter,
+    .draw_frame = draw_encounter,
     .handle_event = unskippable_anim
 };
 
 // Run Away animation
 
-static void _draw_run_away_anim(uint8_t frame_index, void *context) {
+static void draw_run_away_anim(uint8_t frame_index, void *context) {
     dngn_state_t *state = (dngn_state_t*) context;
     switch(frame_index) {
         case 0:
@@ -292,15 +292,15 @@ static void _draw_run_away_anim(uint8_t frame_index, void *context) {
     }
 }
 
-static animation_frame_t _run_away_anim_frames[] = {
+static animation_frame_t run_away_anim_frames[] = {
     { .duration_ticks = 4 },
     { .duration_ticks = 4 },
 };
 
 const animation_def_t DNGN_ANIM_RUN_AWAY = {
-    .frames = _run_away_anim_frames,
-    .frame_count = sizeof(_run_away_anim_frames) / sizeof(_run_away_anim_frames[0]),
-    .draw_frame = _draw_run_away_anim,
+    .frames = run_away_anim_frames,
+    .frame_count = sizeof(run_away_anim_frames) / sizeof(run_away_anim_frames[0]),
+    .draw_frame = draw_run_away_anim,
     .handle_event = skippable_anim,
 };
 // --- END animation definitions
@@ -318,52 +318,49 @@ static void dngn_start_animation_before_screen(dngn_state_t *state, const animat
 
 // ---------- forward declarations ----------
 
-static void _title_transition(movement_event_t event, void *context);
-static void _title_display(movement_event_t event, void *context);
+static void title_transition(movement_event_t event, void *context);
+static void title_display(movement_event_t event, void *context);
 
-static void _anim_transition(movement_event_t event, void *context);
-static void _anim_display(movement_event_t event, void *context);
+static void anim_transition(movement_event_t event, void *context);
+static void anim_display(movement_event_t event, void *context);
 
-static void _descend_transition(movement_event_t event, void *context);
+static void descend_transition(movement_event_t event, void *context);
 
-static void _run_away_transition(movement_event_t event, void *context);
+static void run_away_transition(movement_event_t event, void *context);
 
-// static void _descend_display(movement_event_t event, void *context);
+// static void descend_display(movement_event_t event, void *context);
 
-static void _floor_transition(movement_event_t event, void *context);
-static void _floor_display(movement_event_t event, void *context);
+static void floor_transition(movement_event_t event, void *context);
+static void floor_display(movement_event_t event, void *context);
 
-static void _encounter_transition(movement_event_t event, void *context);
-static void _encounter_display(movement_event_t event, void *context);
+static void encounter_transition(movement_event_t event, void *context);
+static void encounter_display(movement_event_t event, void *context);
 
-static void _encounter_menu_transition(movement_event_t event, void *context);
-static void _encounter_menu_display(movement_event_t event, void *context);
+static void encounter_menu_transition(movement_event_t event, void *context);
+static void encounter_menu_display(movement_event_t event, void *context);
 
-static void _loot_transition(movement_event_t event, void *context);
-static void _loot_display(movement_event_t event, void *context);
+static void loot_transition(movement_event_t event, void *context);
+static void loot_display(movement_event_t event, void *context);
 
-static void _empty_room_transition(movement_event_t event, void *context);
-static void _empty_room_display(movement_event_t event, void *context);
+static void empty_room_transition(movement_event_t event, void *context);
+static void empty_room_display(movement_event_t event, void *context);
 
-static void _game_over_transition(movement_event_t event, void *context);
-static void _game_over_display(movement_event_t event, void *context);
+static void game_over_transition(movement_event_t event, void *context);
+static void game_over_display(movement_event_t event, void *context);
 
-static void _no_op(movement_event_t event, void *context) {};
+static void no_op(movement_event_t event, void *context) {};
 
-dngn_enemy_t dngn_generate_enemy(const dngn_state_t *state);
-bool dngn_run_hit(const dngn_state_t *state);
-uint8_t dngn_potion_heal_amount(const dngn_state_t *state);
-uint8_t dngn_score_for_floor(const dngn_state_t *state);
-uint8_t dngn_score_for_enemy(const dngn_enemy_t *enemy);
+static dngn_enemy_t generate_enemy(const dngn_state_t *state);
+static bool run_hit(const dngn_state_t *state);
+static uint8_t potion_heal_amount(const dngn_state_t *state);
+static void apply_rewards_for_clearing_floor(dngn_state_t *state);
+static uint8_t weighted_roll(weighted_choice_t *choices, uint8_t count);
+static dngn_item_t generate_loot(const dngn_state_t *state);
 
 
 
 // ---------- helpers ----------
-static uint8_t _rand(uint8_t max) {
-    return rand() % max;
-}
-
-uint8_t weighted_roll(weighted_choice_t *choices, uint8_t count) {
+static uint8_t weighted_roll(weighted_choice_t *choices, uint8_t count) {
     uint8_t total = 0;
     for (uint8_t i = 0; i < count; i++) {
         total += choices[i].weight;
@@ -381,7 +378,7 @@ uint8_t weighted_roll(weighted_choice_t *choices, uint8_t count) {
 }
 
 // --- Tunable mechanics ---
-dngn_enemy_t dngn_generate_enemy(const dngn_state_t *state) {
+static dngn_enemy_t generate_enemy(const dngn_state_t *state) {
     dngn_enemy_t e;
 
     uint8_t floor = state->floor;
@@ -401,7 +398,7 @@ dngn_enemy_t dngn_generate_enemy(const dngn_state_t *state) {
     return e;
 }
 
-dngn_item_t dngn_generate_loot(const dngn_state_t *state) {
+static dngn_item_t generate_loot(const dngn_state_t *state) {
     dngn_item_t loot = { DNGN_ITEM_NONE, 0 };
 
     uint8_t roll = rand() % 100;
@@ -411,7 +408,7 @@ dngn_item_t dngn_generate_loot(const dngn_state_t *state) {
     int chance = 0; // used to more clearly indicate percent chance below
     if (can_get_potion && roll < (chance+=30)) {
         loot.type = DNGN_ITEM_POTION;
-        loot.value = dngn_potion_heal_amount(state);
+        loot.value = potion_heal_amount(state);
     }
     else if (can_get_shield && roll < (chance+=15)) {
         loot.type = DNGN_ITEM_SHIELD;
@@ -433,7 +430,7 @@ dngn_item_t dngn_generate_loot(const dngn_state_t *state) {
     return loot;
 }
 
-bool dngn_run_hit(const dngn_state_t *state) {
+static bool run_hit(const dngn_state_t *state) {
     uint8_t base = 50;
     uint8_t penalty = state->floor / 5; // gets worse deeper
 
@@ -443,7 +440,7 @@ bool dngn_run_hit(const dngn_state_t *state) {
     return (rand() % 100) < chance;
 }
 
-uint8_t dngn_potion_heal_amount(const dngn_state_t *state) {
+static uint8_t potion_heal_amount(const dngn_state_t *state) {
     uint8_t heal = 2;
 
     if (state->floor > 10) heal = 3;
@@ -452,16 +449,12 @@ uint8_t dngn_potion_heal_amount(const dngn_state_t *state) {
     return heal;
 }
 
-uint8_t dngn_score_for_floor(const dngn_state_t *state) {
-    return state->floor > 0 ? 1 : 0;
+static void apply_rewards_for_clearing_floor(dngn_state_t *state) {
+    int gold = state->floor > 0 ? 1 : 0;
+    state->player.gold += gold;
 }
 
-uint8_t dngn_score_for_enemy(const dngn_enemy_t *enemy) {
-    return enemy->gold;
-}
-
-
-static uint8_t _clamp(uint8_t value, uint8_t value_min, uint8_t value_max) {
+static uint8_t clamp(uint8_t value, uint8_t value_min, uint8_t value_max) {
     if(value < value_min) return value_min;
     if(value > value_max) return value_max;
     return value;
@@ -477,7 +470,7 @@ static bool player_attack_enemy(dngn_state_t *state) {
     printf("Floor %d. Player attacks enemy with %d ATK. Enemy: %d HP\n", state->floor, state->player.damage, state->enemy.hp);
     if (state->enemy.hp <= 0) {
         printf("Floor %d. Enemy defeated!\n", state->floor);
-        state->player.gold += dngn_score_for_enemy(&state->enemy);
+        state->player.gold += state->enemy.gold;
         return true;
     }
     return false;
@@ -508,12 +501,11 @@ static void end_run(dngn_state_t *state) {
     state->active = false;
 }
 // sets state values for a new room of random type and sets the corresponding screen
-static void _enter_random_room(dngn_state_t *state) {
+static void enter_random_room(dngn_state_t *state) {
     // setup animation
     dngn_start_animation(state, &DNGN_ANIM_DESCEND, 1);
-
-    uint8_t cleared_floor_score = dngn_score_for_floor(state);
-    state->player.gold += cleared_floor_score;
+    // clear previous (current for now) floor
+    apply_rewards_for_clearing_floor(state);
 
     // generate random room
     weighted_choice_t room_weights[][3] = {
@@ -531,21 +523,20 @@ static void _enter_random_room(dngn_state_t *state) {
         { 10, DNGN_ROOM_EMPTY }},
     };
     uint8_t bracket = ++state->floor <= 5 ? 0 : state->floor <= 10 ? 1 : 2;
-    // uint8_t r = _rand(3);
     uint8_t r = weighted_roll(room_weights[bracket], 3);
     state->current_room = (dngn_room_type_t)r;
 
     if (state->current_room == DNGN_ROOM_ENEMY) {
-        state->enemy = dngn_generate_enemy(state);
+        state->enemy = generate_enemy(state);
         state->selected_action = DNGN_ACTION_FIGHT;
         state->screen = DNGN_SCREEN_ENCOUNTER;
     } else if (state->current_room == DNGN_ROOM_LOOT) {
-        state->found_item = dngn_generate_loot(state);
+        state->found_item = generate_loot(state);
         state->screen = DNGN_SCREEN_LOOT;
     } else if (state->current_room == DNGN_ROOM_EMPTY) {
         state->screen = DNGN_SCREEN_EMPTY_ROOM;
     } else {
-        printf("ERROR _enter_random_room Unhandled room type: %d\n", state->current_room);
+        printf("ERROR enter_random_room Unhandled room type: %d\n", state->current_room);
         state->screen = DNGN_SCREEN_EMPTY_ROOM;
     }
 }
@@ -563,7 +554,7 @@ static void reset_player_state(dngn_state_t* state) {
 }
 
 // ---------- TITLE ----------
-static void _title_transition(movement_event_t event, void *context) {
+static void title_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     bool reset_state = false;
     if(event.event_type != EVENT_TICK) printf("_title_transition event_type=%d active=%d\n", event.event_type, state->active);
@@ -582,7 +573,7 @@ static void _title_transition(movement_event_t event, void *context) {
     }
 }
 
-static void _title_display(movement_event_t event, void *context) {
+static void title_display(movement_event_t event, void *context) {
     (void)event;
     (void)context;
     dngn_state_t *state = (dngn_state_t *)context;
@@ -596,7 +587,7 @@ static void _title_display(movement_event_t event, void *context) {
 }
 
 // ---------- ANIM ----------
-static void _anim_transition(movement_event_t event, void *context) {
+static void anim_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     // when animation is finished move to the next state
     if(!state->animation.active && state->screen_after_anim != DNGN_SCREEN_NONE) {
@@ -604,12 +595,12 @@ static void _anim_transition(movement_event_t event, void *context) {
         state->screen_after_anim = DNGN_SCREEN_NONE;
     }
 }
-static void _anim_display(movement_event_t event, void *context) {
+static void anim_display(movement_event_t event, void *context) {
     // nothing to display, animation should be playing
 }
 
 // ---------- FLOOR START ----------
-static void _floor_transition(movement_event_t event, void *context) {
+static void floor_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
     if (event.event_type == EVENT_ALARM_BUTTON_UP) {
@@ -619,7 +610,7 @@ static void _floor_transition(movement_event_t event, void *context) {
     }
 }
 
-static void _floor_display(movement_event_t event, void *context) {
+static void floor_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
     watch_clear_display();
@@ -628,7 +619,7 @@ static void _floor_display(movement_event_t event, void *context) {
     watch_display_float_with_best_effort(state->floor, NULL);
 }
 
-static void _encounter_transition(movement_event_t event, void *context) {
+static void encounter_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     if(!state->animation.active) {
         printf("Starting encounter anim\n");
@@ -646,7 +637,7 @@ static void _encounter_transition(movement_event_t event, void *context) {
     }
 }
 
-static void _encounter_display(movement_event_t event, void *context) {
+static void encounter_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
     // taken care of by animation
@@ -664,7 +655,7 @@ static int calc_heal_amount(dngn_state_t *state) {
 }
 // ---------- ENCOUNTER MENU --------
 
-static void _encounter_menu_transition(movement_event_t event, void *context) {
+static void encounter_menu_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
     if(state->screen_changed) {
@@ -719,7 +710,7 @@ static void _encounter_menu_transition(movement_event_t event, void *context) {
             } else if (state->selected_action == DNGN_ACTION_HEAL && state->player.potions > 0) {
                 state->player.potions--;
                 const int heal_amount = calc_heal_amount(state);
-                state->player.hp = _clamp(state->player.hp + heal_amount, 0, state->player.max_hp);
+                state->player.hp = clamp(state->player.hp + heal_amount, 0, state->player.max_hp);
                 printf("Floor %d. Player drinks healing potion (+%d). Player: %d HP\n", state->floor, heal_amount, state->player.hp);
                 // TODO play healing animation
                 // TODO show +X HP
@@ -734,7 +725,7 @@ static void _encounter_menu_transition(movement_event_t event, void *context) {
                 state->screen = DNGN_SCREEN_ENCOUNTER;
             } else if (state->selected_action == DNGN_ACTION_RUN) {
                 // TODO show anim for - X HP and MISS
-                bool hit = dngn_run_hit(state);
+                bool hit = run_hit(state);
                 state->outcome.encounter.hit = hit;
                 if(hit) {
                     bool died = enemy_attack_player(state);
@@ -756,7 +747,7 @@ static void _encounter_menu_transition(movement_event_t event, void *context) {
     
 }
 
-static void _encounter_menu_display(movement_event_t event, void *context) {
+static void encounter_menu_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
     char buf[5];
@@ -777,7 +768,7 @@ static void _encounter_menu_display(movement_event_t event, void *context) {
             if (state->ticks < TICK_COUNT / 2) {
                 watch_display_text(WATCH_POSITION_BOTTOM, "HEAL");
             } else {
-                uint8_t heal_amount = dngn_potion_heal_amount(state);
+                uint8_t heal_amount = potion_heal_amount(state);
                 // print heal amount
                 snprintf(buf, sizeof buf, "%4d", heal_amount);
                 watch_display_text(WATCH_POSITION_BOTTOM, buf);
@@ -835,7 +826,7 @@ void dngn_apply_loot(dngn_state_t *state, dngn_item_t loot) {
 
 
 // ---------- LOOT ----------
-static void _loot_transition(movement_event_t event, void *context) {
+static void loot_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
     // apply item effects on button press, then enter another room
@@ -852,14 +843,14 @@ static void _loot_transition(movement_event_t event, void *context) {
         else {
             printf("ERROR: Unhandled loot type: %d\n", state->found_item.type);
         }
-        _enter_random_room(state);
+        enter_random_room(state);
     } else {
         default_button_handler(event);
     }
     
 }
 
-static void _loot_display(movement_event_t event, void *context) {
+static void loot_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
     char buf[3]; // 2 chars + \0
@@ -889,16 +880,16 @@ static void _loot_display(movement_event_t event, void *context) {
 }
 
 // ---------- STATUS ----------
-static void _empty_room_transition(movement_event_t event, void *context) {
+static void empty_room_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     if (event.event_type == EVENT_ALARM_BUTTON_UP) {
-        _enter_random_room(state);
+        enter_random_room(state);
     } else {
         default_button_handler(event);
     }
 }
 
-static void _empty_room_display(movement_event_t event, void *context) {
+static void empty_room_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
     watch_clear_display();
@@ -908,7 +899,7 @@ static void _empty_room_display(movement_event_t event, void *context) {
 }
 
 // ---------- GAME OVER ----------
-static void _game_over_transition(movement_event_t event, void *context) {
+static void game_over_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     const int total_ticks = 30;
     if(state->screen_changed) {
@@ -926,7 +917,7 @@ static void _game_over_transition(movement_event_t event, void *context) {
     }
 }
 
-static void _game_over_display(movement_event_t event, void *context) {
+static void game_over_display(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     const int total_ticks = 30;
     const int total_frames = 3;
@@ -953,21 +944,21 @@ static void _game_over_display(movement_event_t event, void *context) {
         watch_display_text(WATCH_POSITION_BOTTOM, buf);
         break;
     default:
-        printf("ERROR: _game_over_display unhandled frame index: %d\n", frame);
+        printf("ERROR: game_over_display unhandled frame index: %d\n", frame);
         break;
     }
 }
 
-static void _descend_transition(movement_event_t event, void *context) {
+static void descend_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     // when current animation is finished, play floor descend animation and roll next room
     if(!state->animation.active) {
         dngn_start_animation(state, &DNGN_ANIM_DESCEND, 1);
-        _enter_random_room(state);
+        enter_random_room(state);
     }
 }
 
-static void _run_away_transition(movement_event_t event, void *context) {
+static void run_away_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     if(!state->animation.active) {
         if (state->outcome.encounter.hit) {
@@ -990,15 +981,15 @@ void dungeon_face_setup(uint8_t watch_face_index, void **context_ptr) {
         dngn_state_t *state = (dngn_state_t *)*context_ptr;
 
         // wire screens
-        state->screens[DNGN_SCREEN_TITLE]       = (dngn_screen_def_t){ _title_transition, _title_display };
-        state->screens[DNGN_SCREEN_DESCEND]       = (dngn_screen_def_t){ _descend_transition, _no_op };
-        state->screens[DNGN_SCREEN_RUN_AWAY]       = (dngn_screen_def_t){ _run_away_transition, _no_op };
-        state->screens[DNGN_SCREEN_ANIM]       = (dngn_screen_def_t){ _anim_transition, _anim_display };
-        state->screens[DNGN_SCREEN_ENCOUNTER]   = (dngn_screen_def_t){ _encounter_transition, _encounter_display };
-        state->screens[DNGN_SCREEN_ENCOUNTER_MENU]   = (dngn_screen_def_t){ _encounter_menu_transition, _encounter_menu_display };
-        state->screens[DNGN_SCREEN_LOOT]        = (dngn_screen_def_t){ _loot_transition, _loot_display };
-        state->screens[DNGN_SCREEN_EMPTY_ROOM]      = (dngn_screen_def_t){ _empty_room_transition, _empty_room_display };
-        state->screens[DNGN_SCREEN_GAME_OVER]   = (dngn_screen_def_t){ _game_over_transition, _game_over_display };
+        state->screens[DNGN_SCREEN_TITLE]       = (dngn_screen_def_t){ title_transition, title_display };
+        state->screens[DNGN_SCREEN_DESCEND]       = (dngn_screen_def_t){ descend_transition, no_op };
+        state->screens[DNGN_SCREEN_RUN_AWAY]       = (dngn_screen_def_t){ run_away_transition, no_op };
+        state->screens[DNGN_SCREEN_ANIM]       = (dngn_screen_def_t){ anim_transition, anim_display };
+        state->screens[DNGN_SCREEN_ENCOUNTER]   = (dngn_screen_def_t){ encounter_transition, encounter_display };
+        state->screens[DNGN_SCREEN_ENCOUNTER_MENU]   = (dngn_screen_def_t){ encounter_menu_transition, encounter_menu_display };
+        state->screens[DNGN_SCREEN_LOOT]        = (dngn_screen_def_t){ loot_transition, loot_display };
+        state->screens[DNGN_SCREEN_EMPTY_ROOM]      = (dngn_screen_def_t){ empty_room_transition, empty_room_display };
+        state->screens[DNGN_SCREEN_GAME_OVER]   = (dngn_screen_def_t){ game_over_transition, game_over_display };
     }
 }
 
