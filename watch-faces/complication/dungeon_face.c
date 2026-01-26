@@ -40,7 +40,7 @@ DNGN_SCREEN_ENCOUNTER_MENU,
 DNGN_SCREEN_RUN_AWAY, // short state to start hit or miss anim
 DNGN_SCREEN_DESCEND, // short state to start descend anim
 DNGN_SCREEN_LOOT,
-DNGN_SCREEN_STATUS,
+DNGN_SCREEN_EMPTY_ROOM,
 DNGN_SCREEN_GAME_OVER,
 DNGN_SCREEN_COUNT
 } dngn_screen_t;
@@ -173,6 +173,7 @@ static bool default_button_handler(movement_event_t event) {
         case EVENT_LIGHT_BUTTON_DOWN:
         case EVENT_LIGHT_BUTTON_UP:
         case EVENT_MODE_LONG_PRESS:
+            printf("Default handler called for event_type=%d\n", event.event_type);
             movement_default_loop_handler(event);
             return true;
     }
@@ -336,8 +337,8 @@ static void _encounter_menu_display(movement_event_t event, void *context);
 static void _loot_transition(movement_event_t event, void *context);
 static void _loot_display(movement_event_t event, void *context);
 
-static void _status_transition(movement_event_t event, void *context);
-static void _status_display(movement_event_t event, void *context);
+static void _empty_room_transition(movement_event_t event, void *context);
+static void _empty_room_display(movement_event_t event, void *context);
 
 static void _game_over_transition(movement_event_t event, void *context);
 static void _game_over_display(movement_event_t event, void *context);
@@ -437,7 +438,6 @@ uint8_t dngn_score_for_floor(const dngn_state_t *state) {
 }
 
 uint8_t dngn_score_for_enemy(const dngn_enemy_t *enemy) {
-    // return enemy->is_boss ? 12 : 6;
     return enemy->gold;
 }
 
@@ -513,10 +513,11 @@ static void _enter_random_room(dngn_state_t *state) {
     } else if (state->current_room == DNGN_ROOM_LOOT) {
         state->found_item = dngn_generate_loot(state);
         state->screen = DNGN_SCREEN_LOOT;
-        printf("Generated loot for room\n");
+    } else if (state->current_room == DNGN_ROOM_EMPTY) {
+        state->screen = DNGN_SCREEN_EMPTY_ROOM;
     } else {
-        // empty room
-        state->screen = DNGN_SCREEN_STATUS;
+        printf("ERROR _enter_random_room Unhandled room type: %d\n", state->current_room);
+        state->screen = DNGN_SCREEN_EMPTY_ROOM;
     }
 }
 
@@ -584,7 +585,7 @@ static void _floor_transition(movement_event_t event, void *context) {
     if (event.event_type == EVENT_ALARM_BUTTON_UP) {
         state->screen = DNGN_SCREEN_DESCEND;
     } else {
-        movement_default_loop_handler(event);
+        default_button_handler(event);
     }
 }
 
@@ -596,52 +597,6 @@ static void _floor_display(movement_event_t event, void *context) {
     // watch_display_text(WATCH_POSITION_BOTTOM, state->floor);
     watch_display_float_with_best_effort(state->floor, NULL);
 }
-
-// ---------- ENCOUNTER ----------
-static void _encounter_transition_orig(movement_event_t event, void *context) {
-    dngn_state_t *state = (dngn_state_t *)context;
-
-    switch (event.event_type) {
-        case EVENT_LIGHT_BUTTON_UP:
-            state->selected_action = (state->selected_action + 1) % DNGN_ACTION_COUNT;
-            break;
-
-        case EVENT_ALARM_BUTTON_UP:
-            if (state->selected_action == DNGN_ACTION_FIGHT) {
-                printf("Floor %d. Player attacks enemy with %d ATK. Enemy: %d HP\n", state->floor, state->player.damage, state->enemy.hp);
-                state->enemy.hp -= state->player.damage;
-                
-                if (state->enemy.hp <= 0) {
-                    printf("Floor %d. Enemy defeated!\n", state->floor);
-                    _enter_random_room(state);
-                    break;
-                }
-                state->player.hp -= state->enemy.damage;
-                printf("Floor %d. Enemy attacks player with %d ATK. Player: %d HP\n", state->floor, state->enemy.damage, state->player.hp);
-            } else if (state->selected_action == DNGN_ACTION_HEAL && state->player.potions > 0) {
-                state->player.potions--;
-                state->player.hp += DNGN_HEALING_POTION_HP;
-                if (state->player.hp > state->player.max_hp)
-                    state->player.hp = state->player.max_hp;
-                printf("Floor %d. Player drinks healing potion (+3). Player: %d HP\n", state->floor, state->player.hp);
-            } else if (state->selected_action == DNGN_ACTION_RUN) {
-                state->player.hp -= 1;
-                _enter_random_room(state);
-                break;
-            }
-
-            if (state->player.hp <= 0) {
-                state->screen = DNGN_SCREEN_GAME_OVER;
-                state->active = false;
-                printf("Floor %d. Player dies!\n", state->floor);
-            }
-            break;
-
-        default:
-            movement_default_loop_handler(event);
-    }
-}
-
 
 static void _encounter_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
@@ -655,8 +610,9 @@ static void _encounter_transition(movement_event_t event, void *context) {
             animation_stop(&state->animation);
             state->screen = DNGN_SCREEN_ENCOUNTER_MENU;
             printf("Going to encounter MENU\n");
+            break;
         default:
-            movement_default_loop_handler(event);
+            default_button_handler(event);
     }
 }
 
@@ -755,7 +711,7 @@ static void _encounter_menu_transition(movement_event_t event, void *context) {
             break;
 
         default:
-            movement_default_loop_handler(event);
+            default_button_handler(event);
     }
     
 }
@@ -794,7 +750,6 @@ static void _encounter_menu_display(movement_event_t event, void *context) {
 
             }
             break;
-            break;
         case DNGN_ACTION_RUN:
             watch_display_text(WATCH_POSITION_BOTTOM, "run");
             break;
@@ -817,7 +772,7 @@ static void _loot_transition(movement_event_t event, void *context) {
         } else if (state->found_item.type == DNGN_ITEM_MAX_HP_UP) {
             state->player.hp += state->found_item.value;
         } else {
-            printf("ERROR: _loot_transition Unhandled loot type: %d\n", state->found_item.type);
+            printf("ERROR: Unhandled loot type: %d\n", state->found_item.type);
         }
         _enter_random_room(state);
     } else {
@@ -845,21 +800,21 @@ static void _loot_display(movement_event_t event, void *context) {
             watch_display_text(WATCH_POSITION_BOTTOM, "none");
             break;
         default:
-            printf("ERROR: Unknown loot type: %d\n", state->found_item.type);
+            printf("ERROR: Unhandled loot type: %d\n", state->found_item.type);
     }
 }
 
 // ---------- STATUS ----------
-static void _status_transition(movement_event_t event, void *context) {
+static void _empty_room_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     if (event.event_type == EVENT_ALARM_BUTTON_UP) {
         _enter_random_room(state);
     } else {
-        movement_default_loop_handler(event);
+        default_button_handler(event);
     }
 }
 
-static void _status_display(movement_event_t event, void *context) {
+static void _empty_room_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
     watch_clear_display();
@@ -958,7 +913,7 @@ void dungeon_face_setup(uint8_t watch_face_index, void **context_ptr) {
         state->screens[DNGN_SCREEN_ENCOUNTER]   = (dngn_screen_def_t){ _encounter_transition, _encounter_display };
         state->screens[DNGN_SCREEN_ENCOUNTER_MENU]   = (dngn_screen_def_t){ _encounter_menu_transition, _encounter_menu_display };
         state->screens[DNGN_SCREEN_LOOT]        = (dngn_screen_def_t){ _loot_transition, _loot_display };
-        state->screens[DNGN_SCREEN_STATUS]      = (dngn_screen_def_t){ _status_transition, _status_display };
+        state->screens[DNGN_SCREEN_EMPTY_ROOM]      = (dngn_screen_def_t){ _empty_room_transition, _empty_room_display };
         state->screens[DNGN_SCREEN_GAME_OVER]   = (dngn_screen_def_t){ _game_over_transition, _game_over_display };
     }
 }
