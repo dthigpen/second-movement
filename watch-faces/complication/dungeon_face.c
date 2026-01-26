@@ -58,6 +58,7 @@ typedef enum {
 DNGN_ACTION_FIGHT = 0,
 DNGN_ACTION_RUN,
 DNGN_ACTION_HEAL,
+DNGN_ACTION_EQUIP_SHEILD,
 DNGN_ACTION_COUNT
 } dngn_action_t;
 
@@ -67,7 +68,8 @@ typedef enum {
 DNGN_ITEM_NONE = 0,
 DNGN_ITEM_WEAPON,
 DNGN_ITEM_POTION,
-// DNGN_ITEM_SHIELD, // TODO
+DNGN_ITEM_SHIELD,
+DNGN_ITEM_GOLD,
 DNGN_ITEM_MAX_HP_UP
 } dngn_item_type_t;
 
@@ -87,7 +89,8 @@ typedef struct {
     uint8_t damage;
     uint8_t gold;
     uint8_t potions;
-    bool has_shield;
+    uint8_t shields;
+    bool shield_equipped;
 } dngn_player_t;
 
 typedef struct {
@@ -162,6 +165,8 @@ typedef struct {
 
 const int DNGN_HEALING_POTION_HP = 3;
 const int DNGN_MAX_POTIONS = 3;
+const int DNGN_MAX_SHIELDS = 1;
+const int DNGN_MAX_HP_UP_AMOUNT = 2;
 
 // --- START animation definitions
 
@@ -400,17 +405,31 @@ dngn_item_t dngn_generate_loot(const dngn_state_t *state) {
     dngn_item_t loot = { DNGN_ITEM_NONE, 0 };
 
     uint8_t roll = rand() % 100;
-
     bool can_get_potion = state->player.potions < DNGN_MAX_POTIONS;
-    if (can_get_potion && roll < 40) {
+    bool can_get_shield = state->player.shields < DNGN_MAX_SHIELDS;
+
+    int chance = 0; // used to more clearly indicate percent chance below
+    if (can_get_potion && roll < (chance+=30)) {
         loot.type = DNGN_ITEM_POTION;
         loot.value = dngn_potion_heal_amount(state);
-    } else if (roll < 60) {
+    }
+    else if (can_get_shield && roll < (chance+=15)) {
+        loot.type = DNGN_ITEM_SHIELD;
+        loot.value = 1; // value not used
+    }
+    else if (roll < (chance+=15)) {
         loot.type = DNGN_ITEM_WEAPON;
         loot.value = 1; // +1 damage
+    } else if (roll < (chance+=15)) {
+        loot.type = DNGN_ITEM_MAX_HP_UP;
+        loot.value = DNGN_MAX_HP_UP_AMOUNT; // +2 hp
+    } else if (roll < (chance+=20)) {
+        loot.type = DNGN_ITEM_GOLD;
+        loot.value = 4; // +4 gold NOTE: current loot display only allows 2 chars, so max 99
+    } else {
+        // 5 percent chance get nothing
     }
-    // TODO add more. Max HP, weapn names, gold?
-    printf("Generated loot. type=%d value=%d\n", loot.type, loot.value);
+    printf("Generated loot. (roll=%d) type=%d value=%d\n", roll, loot.type, loot.value);
     return loot;
 }
 
@@ -465,11 +484,21 @@ static bool player_attack_enemy(dngn_state_t *state) {
 }
 static bool enemy_attack_player(dngn_state_t *state) {
     // returns true if player was defeated
-    state->player.hp -= state->enemy.damage;
-    printf("Floor %d. Enemy attacks player with %d ATK. Player: %d HP\n", state->floor, state->enemy.damage, state->player.hp);
-    if (state->player.hp <= 0) {
-        printf("Floor %d. Player dies!\n", state->floor);
-        return true;
+    bool player_using_shield = state->player.shields > 0 && state->player.shield_equipped;
+    if(player_using_shield) {
+        state->player.shields--;
+        state->player.shield_equipped = false;
+        printf("Used shield to block %d damage. Shield broke. \n", state->enemy.damage);
+        // TODO Show shield breaking or blocking attack
+    } else {
+        bool damage = state->enemy.damage;
+        if (damage >= state->player.hp) {
+            state->player.hp = 0;
+            printf("Floor %d. Player dies!\n", state->floor);
+            return true;
+        } else {
+            state->player.hp -= damage;
+        }
     }
     return false;
 }
@@ -528,7 +557,8 @@ static void reset_player_state(dngn_state_t* state) {
     state->player.max_hp = 10;
     state->player.hp = 10;
     state->player.damage = 2;
-    state->player.potions = 0;
+    state->player.potions = 1;
+    state->player.shields = 1;
     state->player.gold = 0;
 }
 
@@ -659,10 +689,21 @@ static void _encounter_menu_transition(movement_event_t event, void *context) {
         case EVENT_LIGHT_BUTTON_UP:
             // switch to the next menu item and reset ticks for it
             state->ticks = 0;
-            state->selected_action = (state->selected_action + 1) % DNGN_ACTION_COUNT;
+            bool invalid_choice = true;
+            // select next valid item in enum. E.g. only show Heal option if player has potions
+            do {
+                state->selected_action = (state->selected_action + 1) % DNGN_ACTION_COUNT;
+                invalid_choice = (state->selected_action == DNGN_ACTION_HEAL && state->player.potions == 0) || (state->selected_action == DNGN_ACTION_EQUIP_SHEILD && state->player.shields == 0);
+                // if(invalid_choice) {
+                //     printf("Player does not meet conditions for action type: %d. Skipping\n", state->selected_action);
+                // } else {
+                //     printf("Valid action type: %d\n", state->selected_action);
+                // }
+            } while(invalid_choice);
             break;
 
         case EVENT_ALARM_BUTTON_UP:
+            // perform current selected action
             if (state->selected_action == DNGN_ACTION_FIGHT) {
                 if (player_attack_enemy(state)) {
                     state->screen = DNGN_SCREEN_DESCEND;
@@ -700,12 +741,11 @@ static void _encounter_menu_transition(movement_event_t event, void *context) {
                     state->outcome.encounter.died = died;
                 }
                 state->screen = DNGN_SCREEN_RUN_AWAY;
-                break;
+            } else if (state->selected_action == DNGN_ACTION_EQUIP_SHEILD) {
+                state->player.shield_equipped = state->player.shields > 0 && !state->player.shield_equipped;
             }
-            // if an action was taken, reset to the first menu item: fight
-            // unless they tried to select heal when they had no healing potions
-            const bool failed_heal = state->selected_action == DNGN_ACTION_HEAL && state->player.potions == 0;
-            if(!failed_heal) {
+            // reset choice to beginning unless shield equip option
+            if(state->selected_action != DNGN_ACTION_EQUIP_SHEILD) {
                 state->selected_action = DNGN_ACTION_FIGHT;
             }
             break;
@@ -745,19 +785,54 @@ static void _encounter_menu_display(movement_event_t event, void *context) {
                 // print num potions left
                 snprintf(buf, sizeof buf, "%2d", (int)state->player.potions);
                 watch_display_text(WATCH_POSITION_TOP_RIGHT, buf);
-
-
-
             }
             break;
         case DNGN_ACTION_RUN:
             watch_display_text(WATCH_POSITION_BOTTOM, "run");
             break;
+        case DNGN_ACTION_EQUIP_SHEILD:
+            watch_display_text(WATCH_POSITION_BOTTOM, "SHiELD");
+            watch_display_text(WATCH_POSITION_TOP, state->player.shield_equipped ? "On" : "no");
+            // print num shields left
+            snprintf(buf, sizeof buf, "%2d", (int)state->player.shields);
+            watch_display_text(WATCH_POSITION_TOP_RIGHT, buf);
+            break;
         default:
+            printf("ERROR Unhandled display menu item: %d\n", state->selected_action);
             break;
     }
     
 }
+
+void dngn_apply_loot(dngn_state_t *state, dngn_item_t loot) {
+    switch (loot.type) {
+        case DNGN_ITEM_POTION:
+            state->player.potions++;
+            break;
+
+        case DNGN_ITEM_WEAPON:
+            state->player.damage += loot.value;
+            break;
+
+        case DNGN_ITEM_SHIELD:
+            if (state->player.shields < DNGN_MAX_SHIELDS ) {
+                state->player.shields++;
+            }
+            break;
+
+        case DNGN_ITEM_MAX_HP_UP:
+            state->player.max_hp += loot.value;
+            break;
+
+        case DNGN_ITEM_GOLD:
+            state->player.gold += loot.value;
+            break;
+
+        default:
+            break;
+    }
+}
+
 
 // ---------- LOOT ----------
 static void _loot_transition(movement_event_t event, void *context) {
@@ -771,7 +846,10 @@ static void _loot_transition(movement_event_t event, void *context) {
             state->player.potions++;
         } else if (state->found_item.type == DNGN_ITEM_MAX_HP_UP) {
             state->player.hp += state->found_item.value;
-        } else {
+        } else if (state->found_item.type == DNGN_ITEM_NONE) {
+            // no nothing
+        }
+        else {
             printf("ERROR: Unhandled loot type: %d\n", state->found_item.type);
         }
         _enter_random_room(state);
@@ -784,6 +862,7 @@ static void _loot_transition(movement_event_t event, void *context) {
 static void _loot_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
+    char buf[3]; // 2 chars + \0
     watch_clear_display();
     watch_display_text(WATCH_POSITION_TOP, "Lt");
     switch(state->found_item.type) {
@@ -796,11 +875,16 @@ static void _loot_display(movement_event_t event, void *context) {
         case DNGN_ITEM_MAX_HP_UP:
             watch_display_text(WATCH_POSITION_BOTTOM, "HPUP");
             break;
+        case DNGN_ITEM_GOLD:
+            snprintf(buf, sizeof buf, "%2d", (int)state->found_item.value);
+            watch_display_text(WATCH_POSITION_BOTTOM, "Gold");
+            break;
         case DNGN_ITEM_NONE:
-            watch_display_text(WATCH_POSITION_BOTTOM, "none");
+            watch_display_text(WATCH_POSITION_TOP, "No");
+            watch_display_text(WATCH_POSITION_BOTTOM, "Loot");
             break;
         default:
-            printf("ERROR: Unhandled loot type: %d\n", state->found_item.type);
+            printf("ERROR: Unhandled display loot type: %d\n", state->found_item.type);
     }
 }
 
