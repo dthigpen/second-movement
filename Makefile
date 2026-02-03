@@ -75,7 +75,6 @@ INCLUDES += \
   -I./lib/sha256 \
   -I./lib/sha512 \
   -I./lib/base32 \
-  -I./lib/animation \
   -I./lib/menu \
   -I./lib/TOTP \
   -I./lib/chirpy_tx \
@@ -107,7 +106,6 @@ SRCS += \
   ./lib/TOTP/TOTP.c \
   ./lib/chirpy_tx/chirpy_tx.c \
   ./lib/base64/base64.c \
-  ./lib/animation/animation.c \
   ./lib/menu/menu.c \
   ./watch-library/shared/driver/thermistor_driver.c \
   ./watch-library/shared/watch/watch_common_buzzer.c \

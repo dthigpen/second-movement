@@ -25,16 +25,12 @@
 #include <stdlib.h>
 #include "dungeon_face.h"
 #include "watch.h"
-#include "animation.h"
 #include "menu.h"
-
-static uint8_t TICK_COUNT = 20;
 
 // --- High-level screens / modes ---
 typedef enum {
 DNGN_SCREEN_NONE = 0,
 DNGN_SCREEN_TITLE,
-DNGN_SCREEN_ANIM,
 DNGN_SCREEN_ENCOUNTER,
 DNGN_SCREEN_ENCOUNTER_MENU,
 DNGN_SCREEN_RUN_AWAY, // short state to start hit or miss anim
@@ -105,9 +101,7 @@ void (*transition)(movement_event_t event, void *context);
 void (*display)(movement_event_t event, void *context);
 } dngn_screen_def_t;
 
-
-
- // outcome data, used to animate an interaction that just occurred
+// outcome data, used to animate an interaction that just occurred
 typedef struct {
     union {
         struct {
@@ -117,6 +111,14 @@ typedef struct {
     };
 } dngn_outcome_event_t;
 
+
+typedef struct {
+    uint8_t current_tick;
+    uint8_t ticks_per_frame;
+    uint8_t total_frames;
+    bool active;
+    bool loop;
+} dngn_animation_t;
 // --- Main persistent game state ---
 typedef struct {
 // meta
@@ -147,17 +149,15 @@ dngn_item_t found_item;
 
 
 // current animation
-animation_state_t animation;
+// animation_state_t animation;
 
-// ticks for thinks like flash or alternating text on the display
-uint8_t total_frames;
-uint8_t ticks_per_frame;
-uint8_t current_tick;
 bool screen_changed;
 
 dngn_outcome_event_t outcome;
 
+dngn_animation_t anim;
 } dngn_state_t;
+
 
 // For dungeon generation:
 typedef struct {
@@ -170,7 +170,38 @@ const int DNGN_MAX_POTIONS = 3;
 const int DNGN_MAX_SHIELDS = 1;
 const int DNGN_MAX_HP_UP_AMOUNT = 2;
 
-// --- START animation definitions
+static uint8_t get_anim_frame(dngn_animation_t *anim) {
+    return anim->ticks_per_frame == 0 ? 0 : anim->current_tick / anim->ticks_per_frame;
+}
+
+static void start_anim(dngn_animation_t *anim, uint8_t ticks_per_frame, uint8_t total_frames, bool loop) {
+    anim->current_tick = 0;
+    anim->active = true;
+    anim->ticks_per_frame = ticks_per_frame;
+    anim->total_frames = total_frames;
+    anim->loop = loop;
+}
+
+static void stop_anim(dngn_animation_t *anim) {
+    anim->current_tick = 0;
+    anim->active = false;
+    anim->ticks_per_frame = 0;
+    anim->total_frames = 0;
+    anim->loop = false;
+}
+
+static void tick_anim(dngn_animation_t *anim) {
+    anim->current_tick++;
+    if(anim->current_tick >= anim->ticks_per_frame * anim->total_frames) {
+        if(anim->loop) {
+            start_anim(anim, anim->ticks_per_frame, anim->total_frames, anim->loop);
+        } else {
+            stop_anim(anim);
+        }
+    }
+
+}
+
 
 static bool default_button_handler(movement_event_t event) {
     // Returns true if handled by the default handler, otherwise false
@@ -186,20 +217,13 @@ static bool default_button_handler(movement_event_t event) {
     }
     return false;
 }
-static bool unskippable_anim(animation_state_t *anim, movement_event_t event, void *context) {
-    // unskippable meaning it cannot be skipped to reveal content after animation
-    // MODE will still change faces
-    return default_button_handler(event);
-}
 
-static bool skippable_anim(animation_state_t *anim, movement_event_t event, void *context) {
-    switch(event.event_type) {
-        case EVENT_ALARM_BUTTON_UP:
-            printf("Animation SKIPPED!\n");
-            animation_stop(anim);
-            return true;
+static bool skipped_anim(movement_event_t event, dngn_state_t *state) {
+    if(event.event_type == EVENT_ALARM_BUTTON_UP) {
+        stop_anim(&state->anim);
+        return true;
     }
-    return default_button_handler(event);
+    return false;
 }
 
 // Descend animation
@@ -229,22 +253,6 @@ static void draw_descend(uint8_t frame_index, void* context) {
     }
 }
 
-static const animation_frame_t descend_frames[] = {
-    { .duration_ticks = 2 },
-    { .duration_ticks = 2 },
-    { .duration_ticks = 2 },
-    { .duration_ticks = 2 },
-};
-
-const animation_def_t DNGN_ANIM_DESCEND = {
-    .frames = descend_frames,
-    .frame_count = sizeof(descend_frames) / sizeof(descend_frames[0]),
-    .draw_frame = draw_descend,
-    .handle_event = skippable_anim
-};
-
-// Encounter animation
-
 static void draw_encounter(uint8_t frame_index, void* context) {
     
     dngn_state_t *state = (dngn_state_t *) context;
@@ -266,56 +274,18 @@ static void draw_encounter(uint8_t frame_index, void* context) {
             break;
     }
 }
-static const animation_frame_t encounter_frames[] = {
-    { .duration_ticks = 8 },
-    { .duration_ticks = 8 },
-};
-
-const animation_def_t DNGN_ANIM_ENCOUNTER = {
-    .frames = encounter_frames,
-    .frame_count = sizeof(encounter_frames) / sizeof(encounter_frames[0]),
-    .draw_frame = draw_encounter,
-    .handle_event = unskippable_anim
-};
-
-// Run Away animation
 
 static void draw_run_away_anim(uint8_t frame_index, void *context) {
     dngn_state_t *state = (dngn_state_t*) context;
+    const char* text = "HiT";
+    watch_clear_display();
     switch(frame_index) {
         case 0:
-            watch_clear_display();
-            const char* text = "HiT";
+        case 2:
+        case 3: // draw last frame too so it doesn't end on blank
             watch_display_text(WATCH_POSITION_BOTTOM, text);
             break;
-        case 1:
-            watch_clear_display();
-            break;
     }
-}
-
-static animation_frame_t run_away_anim_frames[] = {
-    { .duration_ticks = 4 },
-    { .duration_ticks = 4 },
-};
-
-const animation_def_t DNGN_ANIM_RUN_AWAY = {
-    .frames = run_away_anim_frames,
-    .frame_count = sizeof(run_away_anim_frames) / sizeof(run_away_anim_frames[0]),
-    .draw_frame = draw_run_away_anim,
-    .handle_event = skippable_anim,
-};
-// --- END animation definitions
-
-static void dngn_start_animation(dngn_state_t *state, const animation_def_t* anim_def, int8_t loop) {
-    animation_start(&state->animation, anim_def, (void *) state, loop);
-    movement_request_tick_frequency(8);
-}
-
-static void dngn_start_animation_before_screen(dngn_state_t *state, const animation_def_t* anim_def, int8_t loop, dngn_screen_t next_screen) {
-    animation_start(&state->animation, anim_def, (void *) state, loop);
-    state->screen = DNGN_SCREEN_ANIM;
-    movement_request_tick_frequency(8);
 }
 
 // ---------- forward declarations ----------
@@ -323,18 +293,11 @@ static void dngn_start_animation_before_screen(dngn_state_t *state, const animat
 static void title_transition(movement_event_t event, void *context);
 static void title_display(movement_event_t event, void *context);
 
-static void anim_transition(movement_event_t event, void *context);
-static void anim_display(movement_event_t event, void *context);
-
 static void descend_transition(movement_event_t event, void *context);
 static void descend_display(movement_event_t event, void *context);
 
 static void run_away_transition(movement_event_t event, void *context);
-
-// static void descend_display(movement_event_t event, void *context);
-
-static void floor_transition(movement_event_t event, void *context);
-static void floor_display(movement_event_t event, void *context);
+static void run_away_display(movement_event_t event, void *context);
 
 static void encounter_transition(movement_event_t event, void *context);
 static void encounter_display(movement_event_t event, void *context);
@@ -359,10 +322,11 @@ static uint8_t potion_heal_amount(const dngn_state_t *state);
 static void apply_rewards_for_clearing_floor(dngn_state_t *state);
 static uint8_t weighted_roll(weighted_choice_t *choices, uint8_t count);
 static dngn_item_t generate_loot(const dngn_state_t *state);
-static void start_or_tick_animation(dngn_state_t *state, uint8_t total_frames, uint8_t ticks_per_frame);
-static uint8_t get_current_frame(dngn_state_t *state);
 
-
+static uint8_t get_anim_frame(dngn_animation_t *anim);
+static void start_anim(dngn_animation_t *anim, uint8_t ticks_per_frame, uint8_t total_frames, bool loop);
+static void stop_anim(dngn_animation_t *anim);
+static void tick_anim(dngn_animation_t *anim);
 // ---------- helpers ----------
 static uint8_t weighted_roll(weighted_choice_t *choices, uint8_t count) {
     uint8_t total = 0;
@@ -507,7 +471,6 @@ static void end_run(dngn_state_t *state) {
 // sets state values for a new room of random type and sets the corresponding screen
 static void enter_random_room(dngn_state_t *state) {
     // setup animation
-    dngn_start_animation(state, &DNGN_ANIM_DESCEND, 1);
     // clear previous (current for now) floor
     apply_rewards_for_clearing_floor(state);
 
@@ -543,26 +506,15 @@ static void enter_random_room(dngn_state_t *state) {
         printf("ERROR enter_random_room Unhandled room type: %d\n", state->current_room);
         state->screen = DNGN_SCREEN_EMPTY_ROOM;
     }
-}
+    printf("enter_random_room new screen: %d\n", state->screen);
 
-static uint8_t get_current_frame(dngn_state_t *state) {
-    return state->current_tick / state->ticks_per_frame;
-}
-static void start_or_tick_animation(dngn_state_t *state, uint8_t total_frames, uint8_t ticks_per_frame) {
-    if(state->screen_changed) {
-        state->current_tick = 0;
-        state->ticks_per_frame = ticks_per_frame;
-        state->total_frames = total_frames;
-    } else {
-        state->current_tick = (state->current_tick + 1) % (state->total_frames * state->ticks_per_frame);
-    }
 }
 
 static void reset_player_state(dngn_state_t* state) {
     state->floor = 0;
     // state->player = {0};
     state->player.max_hp = 10;
-    state->player.hp = 10;
+    state->player.hp = 2;
     state->player.damage = 2;
     state->player.potions = 1;
     state->player.shields = 1;
@@ -602,61 +554,26 @@ static void title_display(movement_event_t event, void *context) {
     }
 }
 
-// ---------- ANIM ----------
-static void anim_transition(movement_event_t event, void *context) {
-    dngn_state_t *state = (dngn_state_t *)context;
-    // when animation is finished move to the next state
-    if(!state->animation.active && state->screen_after_anim != DNGN_SCREEN_NONE) {
-        state->screen = state->screen_after_anim;
-        state->screen_after_anim = DNGN_SCREEN_NONE;
-    }
-}
-static void anim_display(movement_event_t event, void *context) {
-    // nothing to display, animation should be playing
-}
-
-// ---------- FLOOR START ----------
-static void floor_transition(movement_event_t event, void *context) {
-    dngn_state_t *state = (dngn_state_t *)context;
-
-    if (event.event_type == EVENT_ALARM_BUTTON_UP) {
-        state->screen = DNGN_SCREEN_DESCEND;
-    } else {
-        default_button_handler(event);
-    }
-}
-
-static void floor_display(movement_event_t event, void *context) {
-    (void)event;
-    dngn_state_t *state = (dngn_state_t *)context;
-    watch_clear_display();
-    watch_display_text(WATCH_POSITION_TOP, "FLOOR");
-    // watch_display_text(WATCH_POSITION_BOTTOM, state->floor);
-    watch_display_float_with_best_effort(state->floor, NULL);
-}
-
 static void encounter_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
-    if(!state->animation.active) {
-        printf("Starting encounter anim\n");
-        dngn_start_animation(state, &DNGN_ANIM_ENCOUNTER, -1);
+    if(state->screen_changed) {
+        start_anim(&state->anim, 6, 2, true);
     }
-
-    switch (event.event_type) {
-        case EVENT_ALARM_BUTTON_UP:
-            animation_stop(&state->animation);
-            state->screen = DNGN_SCREEN_ENCOUNTER_MENU;
-            printf("Going to encounter MENU\n");
-            break;
-        default:
-            default_button_handler(event);
+    if(skipped_anim(event, state)) {
+        state->screen = DNGN_SCREEN_ENCOUNTER_MENU;
+        printf("Going to encounter MENU\n");
+    } else {
+        default_button_handler(event);
     }
 }
 
 static void encounter_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
-    // taken care of by animation
+    if(state->anim.active) {
+        const uint8_t frame = get_anim_frame(&state->anim);
+        draw_encounter(frame, context);
+    }
 }
 
 static int calc_heal_amount(dngn_state_t *state) {
@@ -674,7 +591,10 @@ static int calc_heal_amount(dngn_state_t *state) {
 static void encounter_menu_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
 
-    start_or_tick_animation(state, 2, 10);
+    if(state->screen_changed) {
+        start_anim(&state->anim, 4, 2, true);
+    }
+
     /*
     FIGHT
         Player attacks enemy with their weapon. Enemy HP - Player Weapon DMG
@@ -690,7 +610,7 @@ static void encounter_menu_transition(movement_event_t event, void *context) {
     switch (event.event_type) {
         case EVENT_LIGHT_BUTTON_UP:
             // switch to the next menu item and reset ticks for it
-            state->current_tick = 0;
+            state->anim.current_tick = 0;
             bool invalid_choice = true;
             // select next valid item in enum. E.g. only show Heal option if player has potions
             do {
@@ -765,7 +685,7 @@ static void encounter_menu_display(movement_event_t event, void *context) {
     watch_clear_display();
     watch_set_indicator(WATCH_INDICATOR_LAP);
     // TODO show lap icon, indicating a menu (e.i looping options)
-    const uint8_t current_frame = get_current_frame(state);
+    const uint8_t current_frame = get_anim_frame(&state->anim);
     switch (state->selected_action) {
         case DNGN_ACTION_FIGHT:
             if (current_frame == 0) {
@@ -913,11 +833,13 @@ static void empty_room_display(movement_event_t event, void *context) {
 // ---------- GAME OVER ----------
 static void game_over_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
-    const int total_ticks = 30;
-    start_or_tick_animation(state, 3, 10);
+    if(state->screen_changed) {
+        start_anim(&state->anim, 4, 3, true);
+    }
     switch (event.event_type)
     {
     case EVENT_ALARM_BUTTON_UP:
+        stop_anim(&state->anim);
         state->screen = DNGN_SCREEN_TITLE;
         break;
     default:
@@ -927,7 +849,10 @@ static void game_over_transition(movement_event_t event, void *context) {
 
 static void game_over_display(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
-    const int frame = get_current_frame(state);
+    if(!state->anim.active) {
+        return;
+    }
+    const int frame = get_anim_frame(&state->anim);
     char buf[5]; // 4 chars + \0
     switch (frame)
     {
@@ -957,29 +882,57 @@ static void game_over_display(movement_event_t event, void *context) {
 static void descend_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     // when current animation is finished, play floor descend animation and roll next room
-    // TODO how to handle this without animation api?
-    if(!state->animation.active) {
-        dngn_start_animation(state, &DNGN_ANIM_DESCEND, 1);
+    // anim starting settings
+    if (state->screen_changed) {
+        start_anim(&state->anim, 2, 4, false);
+    }
+
+    switch(event.event_type) {
+        case EVENT_ALARM_BUTTON_UP:
+            stop_anim(&state->anim);
+            break;
+        default:
+            default_button_handler(event);
+    }
+    // after animation finishes, go to the next screen/room
+    if(!state->anim.active) {
         enter_random_room(state);
     }
 }
 
 static void descend_display(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
+    if(!state->anim.active) {
+        return;
+    }
+    const uint8_t frame = get_anim_frame(&state->anim);
+    draw_descend(frame, context);
 }
 
 static void run_away_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
-    if(!state->animation.active) {
+    if(state->screen_changed) {
+        stop_anim(&state->anim);
         if (state->outcome.encounter.hit) {
-            dngn_start_animation(state, &DNGN_ANIM_RUN_AWAY, 2);
+            start_anim(&state->anim, 2, 4, false);
         }
-    }        
-    if(state->player.hp <= 0) {
-        state->screen = DNGN_SCREEN_GAME_OVER;
-    } else {
-        state->screen = DNGN_SCREEN_DESCEND;
     }
+    if(!state->anim.active) {
+        if(state->player.hp <= 0) {
+            state->screen = DNGN_SCREEN_GAME_OVER;
+        } else {
+            state->screen = DNGN_SCREEN_DESCEND;
+        }
+    }
+}
+
+static void run_away_display(movement_event_t event, void *context) {
+    dngn_state_t *state = (dngn_state_t *)context;
+    if(!state->anim.active) {
+        return;
+    }
+    const uint8_t frame = get_anim_frame(&state->anim);
+    draw_run_away_anim(frame, context);
 }
 
 // ---------- lifecycle ----------
@@ -993,8 +946,7 @@ void dungeon_face_setup(uint8_t watch_face_index, void **context_ptr) {
         // wire screens
         state->screens[DNGN_SCREEN_TITLE]       = (dngn_screen_def_t){ title_transition, title_display };
         state->screens[DNGN_SCREEN_DESCEND]       = (dngn_screen_def_t){ descend_transition, descend_display };
-        state->screens[DNGN_SCREEN_RUN_AWAY]       = (dngn_screen_def_t){ run_away_transition, no_op };
-        state->screens[DNGN_SCREEN_ANIM]       = (dngn_screen_def_t){ anim_transition, anim_display };
+        state->screens[DNGN_SCREEN_RUN_AWAY]       = (dngn_screen_def_t){ run_away_transition, run_away_display };
         state->screens[DNGN_SCREEN_ENCOUNTER]   = (dngn_screen_def_t){ encounter_transition, encounter_display };
         state->screens[DNGN_SCREEN_ENCOUNTER_MENU]   = (dngn_screen_def_t){ encounter_menu_transition, encounter_menu_display };
         state->screens[DNGN_SCREEN_LOOT]        = (dngn_screen_def_t){ loot_transition, loot_display };
@@ -1021,32 +973,17 @@ bool dungeon_face_loop(movement_event_t event, void *context) {
     // --- Event handling (and state logic) ---
     dngn_screen_def_t *screen_def = &state->screens[state->screen];
     
-    // allow animation to handle event first
-    // then screen state next
-    if (animation_handle_event(&state->animation, event, context)) {
-        // animation consumed it
-    } else {
-        // Call this screen's transition function
-        // and set a flag if the screen has changed during it
-        dngn_screen_t last_screen = state->screen;
-        screen_def->transition(event, state);
-        dngn_screen_t new_screen = state->screen;
-        state->screen_changed = last_screen != new_screen;
-    }
+    dngn_screen_t last = state->screen;
+    screen_def->transition(event, state);
+    state->screen_changed = (last != state->screen);
 
-    // --- Display ---
-    // allow animation to draw first
-    // if no animation drawn then screen state can draw
-    if (!animation_draw(&state->animation)) {
-        // screen may change during transition
-        screen_def = &state->screens[state->screen];
-        screen_def->display(event, state);
-    }
+    // Draw
+    screen_def = &state->screens[state->screen];
+    screen_def->display(event, state);
 
-    // increment animation state
-    if(event.event_type == EVENT_TICK) {
-        animation_tick(&state->animation);
-        // start_or_tick_animation(state);
+    // Tick animation
+    if (event.event_type == EVENT_TICK) {
+        tick_anim(&state->anim);
     }
     return true;
 }
