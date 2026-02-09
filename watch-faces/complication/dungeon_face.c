@@ -25,7 +25,6 @@
 #include <stdlib.h>
 #include "dungeon_face.h"
 #include "watch.h"
-#include "menu.h"
 
 // --- High-level screens / modes ---
 typedef enum {
@@ -165,9 +164,8 @@ typedef struct {
     uint8_t value;
 } weighted_choice_t;
 
-const int DNGN_HEALING_POTION_HP = 3;
-const int DNGN_MAX_POTIONS = 3;
-const int DNGN_MAX_SHIELDS = 1;
+const int DNGN_MAX_POTIONS = 6;
+const int DNGN_MAX_SHIELDS = 2;
 const int DNGN_MAX_HP_UP_AMOUNT = 2;
 
 static uint8_t get_anim_frame(dngn_animation_t *anim) {
@@ -211,7 +209,7 @@ static bool default_button_handler(movement_event_t event) {
         case EVENT_LIGHT_BUTTON_DOWN:
         case EVENT_LIGHT_BUTTON_UP:
         case EVENT_MODE_LONG_PRESS:
-            printf("Default handler called for event_type=%d\n", event.event_type);
+            // printf("Default handler called for event_type=%d\n", event.event_type);
             movement_default_loop_handler(event);
             return true;
     }
@@ -237,7 +235,7 @@ static void draw_descend(uint8_t frame_index, void* context) {
         case 0:
             watch_clear_display();
             watch_display_text_with_fallback(WATCH_POSITION_TOP, "Flr", "FL");
-            snprintf(buf, sizeof buf, "%2d", (int)state->floor);
+            snprintf(buf, sizeof buf, "%2d", (int)state->floor + 1);
             watch_display_text(WATCH_POSITION_TOP_RIGHT, buf);
             watch_set_pixel(3, 16);
             break;
@@ -354,7 +352,7 @@ static dngn_enemy_t generate_enemy(const dngn_state_t *state) {
     e.is_boss = (floor % 10 == 0);
 
     e.hp = 2 + floor / 2;
-    e.damage = 1 + floor / 6;
+    e.damage = 1 + floor / 5;
 
     if (e.is_boss) {
         e.hp += 3;
@@ -409,12 +407,12 @@ static bool run_hit(const dngn_state_t *state) {
 }
 
 static uint8_t potion_heal_amount(const dngn_state_t *state) {
-    uint8_t heal = 2;
-
-    if (state->floor > 10) heal = 3;
-    if (heal > state->player.max_hp) heal = state->player.max_hp;
-
-    return heal;
+    // uint8_t min_heal = 2;
+    // uint8_t max_heal = 4;
+    // uint8_t base_heal = min_heal + rand() % (max_heal - min_heal + 1);
+    uint8_t base_heal = 2;
+    dngn_enemy_t enemy = state->enemy.damage > 0 ? state->enemy : generate_enemy(state);
+    return enemy.damage + base_heal;
 }
 
 static void apply_rewards_for_clearing_floor(dngn_state_t *state) {
@@ -455,7 +453,7 @@ static bool enemy_attack_player(dngn_state_t *state) {
         bool damage = state->enemy.damage;
         if (damage >= state->player.hp) {
             state->player.hp = 0;
-            printf("Floor %d. Player dies!\n", state->floor);
+            printf("Floor %d. Player dies! Gold: %d\n", state->floor, state->player.gold);
             return true;
         } else {
             state->player.hp -= damage;
@@ -512,9 +510,8 @@ static void enter_random_room(dngn_state_t *state) {
 
 static void reset_player_state(dngn_state_t* state) {
     state->floor = 0;
-    // state->player = {0};
-    state->player.max_hp = 10;
-    state->player.hp = 2;
+    state->player.max_hp = 4;
+    state->player.hp = 4;
     state->player.damage = 2;
     state->player.potions = 1;
     state->player.shields = 1;
@@ -576,16 +573,6 @@ static void encounter_display(movement_event_t event, void *context) {
     }
 }
 
-static int calc_heal_amount(dngn_state_t *state) {
-    uint8_t floor = state->floor;
-    if (floor <= 10) {
-        return 3;
-    } else if (floor <= 20) {
-        return 6;
-    } else {
-        return 8;
-    }
-}
 // ---------- ENCOUNTER MENU --------
 
 static void encounter_menu_transition(movement_event_t event, void *context) {
@@ -640,7 +627,7 @@ static void encounter_menu_transition(movement_event_t event, void *context) {
                 state->screen = DNGN_SCREEN_ENCOUNTER;
             } else if (state->selected_action == DNGN_ACTION_HEAL && state->player.potions > 0) {
                 state->player.potions--;
-                const int heal_amount = calc_heal_amount(state);
+                const int heal_amount = potion_heal_amount(state);
                 state->player.hp = clamp(state->player.hp + heal_amount, 0, state->player.max_hp);
                 printf("Floor %d. Player drinks healing potion (+%d). Player: %d HP\n", state->floor, heal_amount, state->player.hp);
                 // TODO play healing animation
@@ -769,13 +756,14 @@ static void loot_transition(movement_event_t event, void *context) {
             state->player.potions++;
         } else if (state->found_item.type == DNGN_ITEM_MAX_HP_UP) {
             state->player.hp += state->found_item.value;
+        } else if (state->found_item.type == DNGN_ITEM_GOLD) {
+            state->player.gold += state->found_item.value;
         } else if (state->found_item.type == DNGN_ITEM_NONE) {
             // no nothing
-        }
-        else {
+        } else {
             printf("ERROR: Unhandled loot type: %d\n", state->found_item.type);
         }
-        enter_random_room(state);
+        state->screen = DNGN_SCREEN_DESCEND;
     } else {
         default_button_handler(event);
     }
