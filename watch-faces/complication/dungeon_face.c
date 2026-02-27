@@ -25,6 +25,10 @@
 #include <stdlib.h>
 #include "dungeon_face.h"
 #include "watch.h"
+#include <time.h>
+
+#define ROOM_BAG_SIZE 10
+#define LOOT_BAG_SIZE 10
 
 // --- High-level screens / modes ---
 typedef enum {
@@ -47,6 +51,14 @@ DNGN_ROOM_ENEMY,
 DNGN_ROOM_LOOT
 } dngn_room_type_t;
 
+// --- Enemy types ---
+typedef enum {
+DNGN_ENEMY_TYPE_BRUTE = 0,
+DNGN_ENEMY_TYPE_STRIKER,
+DNGN_ENEMY_TYPE_SWING,
+DNGN_ENEMY_TYPE_COUNT,
+} dngn_enemy_type_t;
+
 
 // --- Player actions during encounters ---
 typedef enum {
@@ -65,6 +77,7 @@ DNGN_ITEM_WEAPON,
 DNGN_ITEM_POTION,
 DNGN_ITEM_SHIELD,
 DNGN_ITEM_GOLD,
+DNGN_ITEM_HP_UP,
 DNGN_ITEM_MAX_HP_UP
 } dngn_item_type_t;
 
@@ -131,7 +144,15 @@ bool active;
 
 // dungeon progression
 uint8_t floor;
+
+// Room related
+dngn_room_type_t room_bag[ROOM_BAG_SIZE];
+int room_bag_count;
 dngn_room_type_t current_room;
+
+// Loot related
+dngn_item_type_t loot_bag[LOOT_BAG_SIZE];
+int loot_bag_count;
 
 
 // player stats
@@ -325,19 +346,32 @@ static uint8_t get_anim_frame(dngn_animation_t *anim);
 static void start_anim(dngn_animation_t *anim, uint8_t ticks_per_frame, uint8_t total_frames, bool loop);
 static void stop_anim(dngn_animation_t *anim);
 static void tick_anim(dngn_animation_t *anim);
+static void refill_room_bag(dngn_state_t *state);
+static void refill_loot_bag(dngn_state_t *state);
+
+static dngn_room_type_t get_next_room_type();
+static dngn_item_type_t get_next_loot_type();
+
 // ---------- helpers ----------
+void init_random() {
+    srand((unsigned int)time(NULL));
+}
+
+static uint8_t roll(uint8_t min_inclusive, uint8_t max_inclusive) {
+    return rand() % (max_inclusive - min_inclusive + 1) + min_inclusive;
+}
 static uint8_t weighted_roll(weighted_choice_t *choices, uint8_t count) {
     uint8_t total = 0;
     for (uint8_t i = 0; i < count; i++) {
         total += choices[i].weight;
     }
 
-    uint8_t roll = rand() % total;
+    uint8_t roll_val = rand() % total;
     for (uint8_t i = 0; i < count; i++) {
-        if (roll < choices[i].weight) {
+        if (roll_val < choices[i].weight) {
             return choices[i].value;
         }
-        roll -= choices[i].weight;
+        roll_val -= choices[i].weight;
     }
 
     return choices[count - 1].value;
@@ -349,7 +383,29 @@ static dngn_enemy_t generate_enemy(const dngn_state_t *state) {
 
     uint8_t floor = state->floor;
 
-    e.is_boss = (floor % 10 == 0);
+    // TODO bring back as random chance for an "elite" enemy
+    e.is_boss = roll(0, 100) <= 5;
+
+    const uint8_t enemy_type = roll(0, DNGN_ENEMY_TYPE_COUNT);
+    switch (enemy_type)
+    {
+    case DNGN_ENEMY_TYPE_BRUTE:
+        e.hp  = 4 + state->floor * 2;
+        e.damage = 1 + state->floor / 4;
+        break;
+    case DNGN_ENEMY_TYPE_STRIKER:
+        e.hp  = 2 + state->floor;
+        e.damage = 2 + state->floor / 3;
+        break;
+    case DNGN_ENEMY_TYPE_SWING:
+        e.hp = 3 + state->floor * 3 / 2;
+        e.damage = 1 + state->floor / 4; // base damage
+        e.damage += roll(0, 1 + state->floor / 6); // extra
+        break;
+    default:
+        printf("ERROR Unknown enemy type while generating enemy: %d\n", enemy_type);
+        break;
+    }
 
     e.hp = 2 + floor / 2;
     e.damage = 1 + floor / 5;
@@ -367,32 +423,44 @@ static dngn_enemy_t generate_enemy(const dngn_state_t *state) {
 static dngn_item_t generate_loot(const dngn_state_t *state) {
     dngn_item_t loot = { DNGN_ITEM_NONE, 0 };
 
-    uint8_t roll = rand() % 100;
-    bool can_get_potion = state->player.potions < DNGN_MAX_POTIONS;
-    bool can_get_shield = state->player.shields < DNGN_MAX_SHIELDS;
+    loot.type = get_next_loot_type(state);
 
-    int chance = 0; // used to more clearly indicate percent chance below
-    if (can_get_potion && roll < (chance+=30)) {
-        loot.type = DNGN_ITEM_POTION;
+    // convert to gold if roll cannot be used
+    bool at_max_potions = state->player.potions >= DNGN_MAX_POTIONS;
+    bool at_max_shields = state->player.shields >= DNGN_MAX_SHIELDS;
+    bool at_max_hp = state->player.hp >= state->player.max_hp;
+    if((loot.type == DNGN_ITEM_POTION && at_max_potions) ||
+        (loot.type == DNGN_ITEM_SHIELD && at_max_shields) ||
+        (loot.type == DNGN_ITEM_HP_UP && at_max_hp)) {
+            printf("WARN Got unusable item type %d, converting to Gold.\n", loot.type);
+            loot.type = DNGN_ITEM_GOLD;
+    }
+    switch (loot.type)
+    {
+    case DNGN_ITEM_WEAPON:
+        loot.value = 1;
+        break;
+    case DNGN_ITEM_POTION:
         loot.value = potion_heal_amount(state);
+        break;
+    case DNGN_ITEM_SHIELD:
+        loot.value = 1; // value not used right now
+        break;
+    case DNGN_ITEM_GOLD:
+        loot.value = 4;
+        break;
+    case DNGN_ITEM_HP_UP:
+        loot.value = DNGN_MAX_HP_UP_AMOUNT; // TODO change to its own amount
+        break;
+    case DNGN_ITEM_MAX_HP_UP:
+        loot.value = DNGN_MAX_HP_UP_AMOUNT;
+        break;
+    default:
+        printf("ERROR Unhandled type of loot generated: %d\n", loot.type);
+        break;
     }
-    else if (can_get_shield && roll < (chance+=15)) {
-        loot.type = DNGN_ITEM_SHIELD;
-        loot.value = 1; // value not used
-    }
-    else if (roll < (chance+=15)) {
-        loot.type = DNGN_ITEM_WEAPON;
-        loot.value = 1; // +1 damage
-    } else if (roll < (chance+=15)) {
-        loot.type = DNGN_ITEM_MAX_HP_UP;
-        loot.value = DNGN_MAX_HP_UP_AMOUNT; // +2 hp
-    } else if (roll < (chance+=20)) {
-        loot.type = DNGN_ITEM_GOLD;
-        loot.value = 4; // +4 gold NOTE: current loot display only allows 2 chars, so max 99
-    } else {
-        // 5 percent chance get nothing
-    }
-    printf("Generated loot. (roll=%d) type=%d value=%d\n", roll, loot.type, loot.value);
+    
+    printf("Generated loot type=%d value=%d\n", loot.type, loot.value);
     return loot;
 }
 
@@ -426,6 +494,104 @@ static uint8_t clamp(uint8_t value, uint8_t value_min, uint8_t value_max) {
     return value;
 }
 
+void refill_room_bag(dngn_state_t *state) {
+    int i = 0;
+    int encounter_count = 6;
+    int loot_count = 3;
+    int empty_count = 2;
+
+    for (int j = 0; j < encounter_count; j++)
+        state->room_bag[i++] = DNGN_ROOM_ENEMY;
+
+    for (int j = 0; j < loot_count; j++)
+        state->room_bag[i++] = DNGN_ROOM_LOOT;
+
+    for (int j = 0; j < empty_count; j++)
+        state->room_bag[i++] = DNGN_ROOM_EMPTY;
+
+    state->room_bag_count = ROOM_BAG_SIZE;
+}
+
+/* ---------------------- */
+/* Get Next Room */
+/* ---------------------- */
+dngn_room_type_t get_next_room_type(dngn_state_t *state) {
+
+    // Refill if empty
+    if (state->room_bag_count == 0) {
+        printf("DEBUG Room bag empty, refilling\n");
+        refill_room_bag(state);
+    }
+
+    // Pick random index from remaining entries
+    int r = rand() % state->room_bag_count;
+
+    dngn_room_type_t chosen = state->room_bag[r];
+    
+    // Swap chosen with last element
+    state->room_bag[r] = state->room_bag[state->room_bag_count - 1];
+    
+    // Shrink bag
+    state->room_bag_count--;
+    printf("DEBUG Chose index %d, room type %d. %d choices remain\n", r, chosen, state->room_bag_count);
+
+    return chosen;
+}
+
+/* ---------------------- */
+/* refill_loot_bag        */
+/* ---------------------- */
+static void refill_loot_bag(dngn_state_t *state)
+{
+    int i = 0;
+    int weapon_count = 2;
+    int potion_count = 2;
+    int hp_count = 2;
+    int max_hp_count = 1;
+    int shield_count = 1;
+    int gold_count = 2;
+    for (int j = 0; j < weapon_count; j++)
+        state->loot_bag[i++] = DNGN_ITEM_WEAPON;
+
+    for (int j = 0; j < potion_count; j++)
+        state->loot_bag[i++] = DNGN_ITEM_POTION;
+
+    for (int j = 0; j < hp_count; j++)
+        state->loot_bag[i++] = DNGN_ITEM_HP_UP;
+
+    for (int j = 0; j < max_hp_count; j++)
+        state->loot_bag[i++] = DNGN_ITEM_MAX_HP_UP;
+
+    for (int j = 0; j < shield_count; j++)
+        state->loot_bag[i++] = DNGN_ITEM_SHIELD;
+
+    for (int j = 0; j < gold_count; j++)
+        state->loot_bag[i++] = DNGN_ITEM_GOLD;
+
+    state->loot_bag_count = LOOT_BAG_SIZE;
+}
+
+
+/* ---------------------- */
+/* get_next_loot          */
+/* ---------------------- */
+static dngn_item_type_t get_next_loot_type(dngn_state_t *state)
+{
+    if (state->loot_bag_count == 0) {
+        refill_loot_bag(state);
+    }
+
+    int r = rand() % state->loot_bag_count;
+
+    dngn_item_type_t chosen = state->loot_bag[r];
+
+    // swap with last
+    state->loot_bag[r] = state->loot_bag[state->loot_bag_count - 1];
+
+    state->loot_bag_count--;
+
+    return chosen;
+}
 static bool is_player_dead(dngn_state_t *state) {
     return state->player.hp <= 0;
 }
@@ -471,25 +637,8 @@ static void enter_random_room(dngn_state_t *state) {
     // setup animation
     // clear previous (current for now) floor
     apply_rewards_for_clearing_floor(state);
-
-    // generate random room
-    weighted_choice_t room_weights[][3] = {
-        // floors 1-5
-        {{ 50, DNGN_ROOM_ENEMY },
-        { 30, DNGN_ROOM_LOOT },
-        { 20, DNGN_ROOM_EMPTY }},
-        // floors 6-10
-        {{ 60, DNGN_ROOM_ENEMY },
-        { 25, DNGN_ROOM_LOOT },
-        { 15, DNGN_ROOM_EMPTY }},
-        // floors 11+
-        {{ 70, DNGN_ROOM_ENEMY },
-        { 20, DNGN_ROOM_LOOT },
-        { 10, DNGN_ROOM_EMPTY }},
-    };
-    uint8_t bracket = ++state->floor <= 5 ? 0 : state->floor <= 10 ? 1 : 2;
-    uint8_t r = weighted_roll(room_weights[bracket], 3);
-    state->current_room = (dngn_room_type_t)r;
+    state->floor++;
+    state->current_room = get_next_room_type(state);
 
     if (state->current_room == DNGN_ROOM_ENEMY) {
         state->enemy = generate_enemy(state);
@@ -511,8 +660,8 @@ static void enter_random_room(dngn_state_t *state) {
 static void reset_player_state(dngn_state_t* state) {
     state->floor = 0;
     state->player.max_hp = 4;
-    state->player.hp = 4;
-    state->player.damage = 2;
+    state->player.hp = 40;
+    state->player.damage = 20;
     state->player.potions = 1;
     state->player.shields = 1;
     state->player.gold = 0;
@@ -755,7 +904,9 @@ static void loot_transition(movement_event_t event, void *context) {
         } else if (state->found_item.type == DNGN_ITEM_POTION) {
             state->player.potions++;
         } else if (state->found_item.type == DNGN_ITEM_MAX_HP_UP) {
-            state->player.hp += state->found_item.value;
+            state->player.max_hp += state->found_item.value;
+            // give their HP a littel boost too
+            state->player.hp = clamp(state->player.hp + state->found_item.value, 0, state->player.max_hp);
         } else if (state->found_item.type == DNGN_ITEM_GOLD) {
             state->player.gold += state->found_item.value;
         } else if (state->found_item.type == DNGN_ITEM_NONE) {
@@ -775,7 +926,6 @@ static void loot_display(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     char buf[3]; // 2 chars + \0
     watch_clear_display();
-    watch_display_text(WATCH_POSITION_TOP, "Lt");
     switch(state->found_item.type) {
         case DNGN_ITEM_WEAPON:
             watch_display_text(WATCH_POSITION_BOTTOM, "dagr");
@@ -783,12 +933,15 @@ static void loot_display(movement_event_t event, void *context) {
         case DNGN_ITEM_POTION:
             watch_display_text(WATCH_POSITION_BOTTOM, "Potn");
             break;
-        case DNGN_ITEM_MAX_HP_UP:
-            watch_display_text(WATCH_POSITION_BOTTOM, "HPUP");
+        case DNGN_ITEM_SHIELD:
+            watch_display_text(WATCH_POSITION_BOTTOM, "SHiELD");
             break;
         case DNGN_ITEM_GOLD:
             snprintf(buf, sizeof buf, "%2d", (int)state->found_item.value);
             watch_display_text(WATCH_POSITION_BOTTOM, "Gold");
+            break;
+        case DNGN_ITEM_MAX_HP_UP:
+            watch_display_text(WATCH_POSITION_BOTTOM, "HPUP");
             break;
         case DNGN_ITEM_NONE:
             watch_display_text(WATCH_POSITION_TOP, "No");
@@ -813,9 +966,10 @@ static void empty_room_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
     watch_clear_display();
-    watch_display_text(WATCH_POSITION_TOP, "HP");
+    // watch_display_text(WATCH_POSITION_TOP, "HP");
+    watch_display_text(WATCH_POSITION_BOTTOM, "EmPty");
     // watch_display_number(WATCH_POSITION_BOTTOM, state->player.hp);
-    watch_display_float_with_best_effort(state->player.hp, NULL);
+    // watch_display_float_with_best_effort(state->player.hp, NULL);
 }
 
 // ---------- GAME OVER ----------
