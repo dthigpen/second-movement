@@ -272,6 +272,26 @@ static void draw_descend(uint8_t frame_index, void* context) {
     }
 }
 
+static void draw_loot_text(uint8_t frame_index, void* context) {
+    
+    dngn_state_t *state = (dngn_state_t *) context;
+    watch_clear_display();
+    switch(frame_index) {
+        case 0:
+            watch_display_text(WATCH_POSITION_BOTTOM, "Loot");
+            break;
+        case 1:
+            watch_clear_display();
+            break;
+        case 2:
+            watch_display_text(WATCH_POSITION_BOTTOM, "Loot");
+            break;
+        case 3:
+            watch_clear_display();
+            break;
+    }
+}
+
 static void draw_encounter(uint8_t frame_index, void* context) {
     
     dngn_state_t *state = (dngn_state_t *) context;
@@ -285,6 +305,13 @@ static void draw_encounter(uint8_t frame_index, void* context) {
             watch_display_text(WATCH_POSITION_SECONDS, "HP");
             break;
         case 1:
+            watch_clear_display();
+            watch_display_text_with_fallback(WATCH_POSITION_TOP, "ENEMY", "EN");
+            snprintf(buf, sizeof buf, "%4d", (int)state->enemy.damage);
+            watch_display_text(WATCH_POSITION_BOTTOM, buf);
+            watch_display_text(WATCH_POSITION_SECONDS, "At");
+            break;
+        case 2:
             watch_clear_display();
             watch_display_text_with_fallback(WATCH_POSITION_TOP, "PLyr", "PL");
             snprintf(buf, sizeof buf, "%4d", (int)state->player.hp);
@@ -386,7 +413,7 @@ static dngn_enemy_t generate_enemy(const dngn_state_t *state) {
     // TODO bring back as random chance for an "elite" enemy
     e.is_boss = roll(0, 100) <= 5;
 
-    const uint8_t enemy_type = roll(0, DNGN_ENEMY_TYPE_COUNT);
+    const uint8_t enemy_type = roll(0, DNGN_ENEMY_TYPE_COUNT - 1);
     switch (enemy_type)
     {
     case DNGN_ENEMY_TYPE_BRUTE:
@@ -403,7 +430,7 @@ static dngn_enemy_t generate_enemy(const dngn_state_t *state) {
         e.damage += roll(0, 1 + state->floor / 6); // extra
         break;
     default:
-        printf("ERROR Unknown enemy type while generating enemy: %d\n", enemy_type);
+        printf("ERROR Unhandled enemy type while generating enemy: %d\n", enemy_type);
         break;
     }
 
@@ -498,7 +525,7 @@ void refill_room_bag(dngn_state_t *state) {
     int i = 0;
     int encounter_count = 6;
     int loot_count = 3;
-    int empty_count = 2;
+    int empty_count = 1;
 
     for (int j = 0; j < encounter_count; j++)
         state->room_bag[i++] = DNGN_ROOM_ENEMY;
@@ -660,8 +687,8 @@ static void enter_random_room(dngn_state_t *state) {
 static void reset_player_state(dngn_state_t* state) {
     state->floor = 0;
     state->player.max_hp = 4;
-    state->player.hp = 40;
-    state->player.damage = 20;
+    state->player.hp = 4;
+    state->player.damage = 2;
     state->player.potions = 1;
     state->player.shields = 1;
     state->player.gold = 0;
@@ -703,7 +730,7 @@ static void title_display(movement_event_t event, void *context) {
 static void encounter_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     if(state->screen_changed) {
-        start_anim(&state->anim, 6, 2, true);
+        start_anim(&state->anim, 6, 3, true);
     }
     if(skipped_anim(event, state)) {
         state->screen = DNGN_SCREEN_ENCOUNTER_MENU;
@@ -896,27 +923,42 @@ void dngn_apply_loot(dngn_state_t *state, dngn_item_t loot) {
 // ---------- LOOT ----------
 static void loot_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
-
-    // apply item effects on button press, then enter another room
-    if (event.event_type == EVENT_ALARM_BUTTON_UP) {
-        if (state->found_item.type == DNGN_ITEM_WEAPON) {
-            state->player.damage += state->found_item.value;
-        } else if (state->found_item.type == DNGN_ITEM_POTION) {
-            state->player.potions++;
-        } else if (state->found_item.type == DNGN_ITEM_MAX_HP_UP) {
-            state->player.max_hp += state->found_item.value;
-            // give their HP a littel boost too
-            state->player.hp = clamp(state->player.hp + state->found_item.value, 0, state->player.max_hp);
-        } else if (state->found_item.type == DNGN_ITEM_GOLD) {
-            state->player.gold += state->found_item.value;
-        } else if (state->found_item.type == DNGN_ITEM_NONE) {
-            // no nothing
-        } else {
-            printf("ERROR: Unhandled loot type: %d\n", state->found_item.type);
+    // Show flashing "Loot" text before revealing
+    if(state->screen_changed) {
+        start_anim(&state->anim, 2, 4, false);
+    }
+    // If Loot anim is showing, allow it to be skipped
+    if(state->anim.active) {
+        switch(event.event_type) {
+        case EVENT_ALARM_BUTTON_UP:
+            stop_anim(&state->anim);
+            break;
+        default:
+            default_button_handler(event);
         }
-        state->screen = DNGN_SCREEN_DESCEND;
     } else {
-        default_button_handler(event);
+        // apply item effects on button press, then enter another room
+        if (event.event_type == EVENT_ALARM_BUTTON_UP) {
+            // TODO switch/case here?
+            if (state->found_item.type == DNGN_ITEM_WEAPON) {
+                state->player.damage += state->found_item.value;
+            } else if (state->found_item.type == DNGN_ITEM_POTION) {
+                state->player.potions++;
+            } else if (state->found_item.type == DNGN_ITEM_MAX_HP_UP) {
+                state->player.max_hp += state->found_item.value;
+                // give their HP a littel boost too
+                state->player.hp = clamp(state->player.hp + state->found_item.value, 0, state->player.max_hp);
+            } else if (state->found_item.type == DNGN_ITEM_GOLD) {
+                state->player.gold += state->found_item.value;
+            } else if (state->found_item.type == DNGN_ITEM_NONE) {
+                // no nothing
+            } else {
+                printf("ERROR: Unhandled loot type: %d\n", state->found_item.type);
+            }
+            state->screen = DNGN_SCREEN_DESCEND;
+        } else {
+            default_button_handler(event);
+        }
     }
     
 }
@@ -924,6 +966,16 @@ static void loot_transition(movement_event_t event, void *context) {
 static void loot_display(movement_event_t event, void *context) {
     (void)event;
     dngn_state_t *state = (dngn_state_t *)context;
+    // Return early so that next loop will call loot_transition and start the animation
+    if(state->screen_changed) {
+        return;
+    }
+    // Handle the Loot text case if active
+    if(state->anim.active) {
+        const uint8_t frame = get_anim_frame(&state->anim);
+        draw_loot_text(frame, context);
+        return;
+    }
     char buf[3]; // 2 chars + \0
     watch_clear_display();
     switch(state->found_item.type) {
