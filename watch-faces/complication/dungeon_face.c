@@ -77,7 +77,7 @@ DNGN_ITEM_WEAPON,
 DNGN_ITEM_POTION,
 DNGN_ITEM_SHIELD,
 DNGN_ITEM_GOLD,
-DNGN_ITEM_HP_UP,
+DNGN_ITEM_HP,
 DNGN_ITEM_MAX_HP_UP
 } dngn_item_type_t;
 
@@ -176,6 +176,8 @@ bool screen_changed;
 dngn_outcome_event_t outcome;
 
 dngn_animation_t anim;
+
+uint8_t menu_index;
 } dngn_state_t;
 
 
@@ -228,7 +230,7 @@ static bool default_button_handler(movement_event_t event) {
     switch(event.event_type) {
         case EVENT_MODE_BUTTON_UP:
         case EVENT_LIGHT_BUTTON_DOWN:
-        case EVENT_LIGHT_BUTTON_UP:
+        // case EVENT_LIGHT_BUTTON_UP:
         case EVENT_MODE_LONG_PRESS:
             // printf("Default handler called for event_type=%d\n", event.event_type);
             movement_default_loop_handler(event);
@@ -296,27 +298,23 @@ static void draw_encounter(uint8_t frame_index, void* context) {
     
     dngn_state_t *state = (dngn_state_t *) context;
     char buf[5]; // 4 chars + \0
+    int enemy_stat = (int) (state->menu_index == 0 ? state->enemy.hp : state->enemy.damage);
+    int player_stat = (int) (state->menu_index == 0 ? state->player.hp : state->player.damage);
+    const char* label = state->menu_index == 0 ? "HP" : "dg";
     switch(frame_index) {
         case 0:
             watch_clear_display();
             watch_display_text_with_fallback(WATCH_POSITION_TOP, "ENEMY", "EN");
-            snprintf(buf, sizeof buf, "%4d", (int)state->enemy.hp);
+            snprintf(buf, sizeof buf, "%4d", enemy_stat);
             watch_display_text(WATCH_POSITION_BOTTOM, buf);
-            watch_display_text(WATCH_POSITION_SECONDS, "HP");
+            watch_display_text(WATCH_POSITION_SECONDS, label);
             break;
         case 1:
             watch_clear_display();
-            watch_display_text_with_fallback(WATCH_POSITION_TOP, "ENEMY", "EN");
-            snprintf(buf, sizeof buf, "%4d", (int)state->enemy.damage);
-            watch_display_text(WATCH_POSITION_BOTTOM, buf);
-            watch_display_text(WATCH_POSITION_SECONDS, "At");
-            break;
-        case 2:
-            watch_clear_display();
             watch_display_text_with_fallback(WATCH_POSITION_TOP, "PLyr", "PL");
-            snprintf(buf, sizeof buf, "%4d", (int)state->player.hp);
+            snprintf(buf, sizeof buf, "%4d", player_stat);
             watch_display_text(WATCH_POSITION_BOTTOM, buf);
-            watch_display_text(WATCH_POSITION_SECONDS, "HP");
+            watch_display_text(WATCH_POSITION_SECONDS, label);
             break;
     }
 }
@@ -376,8 +374,8 @@ static void tick_anim(dngn_animation_t *anim);
 static void refill_room_bag(dngn_state_t *state);
 static void refill_loot_bag(dngn_state_t *state);
 
-static dngn_room_type_t get_next_room_type();
-static dngn_item_type_t get_next_loot_type();
+static dngn_room_type_t get_next_room_type(dngn_state_t *state);
+static dngn_item_type_t get_next_loot_type(dngn_state_t *state);
 
 // ---------- helpers ----------
 void init_random() {
@@ -458,7 +456,7 @@ static dngn_item_t generate_loot(const dngn_state_t *state) {
     bool at_max_hp = state->player.hp >= state->player.max_hp;
     if((loot.type == DNGN_ITEM_POTION && at_max_potions) ||
         (loot.type == DNGN_ITEM_SHIELD && at_max_shields) ||
-        (loot.type == DNGN_ITEM_HP_UP && at_max_hp)) {
+        (loot.type == DNGN_ITEM_HP && at_max_hp)) {
             printf("WARN Got unusable item type %d, converting to Gold.\n", loot.type);
             loot.type = DNGN_ITEM_GOLD;
     }
@@ -476,7 +474,7 @@ static dngn_item_t generate_loot(const dngn_state_t *state) {
     case DNGN_ITEM_GOLD:
         loot.value = 4;
         break;
-    case DNGN_ITEM_HP_UP:
+    case DNGN_ITEM_HP:
         loot.value = DNGN_MAX_HP_UP_AMOUNT; // TODO change to its own amount
         break;
     case DNGN_ITEM_MAX_HP_UP:
@@ -584,7 +582,7 @@ static void refill_loot_bag(dngn_state_t *state)
         state->loot_bag[i++] = DNGN_ITEM_POTION;
 
     for (int j = 0; j < hp_count; j++)
-        state->loot_bag[i++] = DNGN_ITEM_HP_UP;
+        state->loot_bag[i++] = DNGN_ITEM_HP;
 
     for (int j = 0; j < max_hp_count; j++)
         state->loot_bag[i++] = DNGN_ITEM_MAX_HP_UP;
@@ -599,9 +597,6 @@ static void refill_loot_bag(dngn_state_t *state)
 }
 
 
-/* ---------------------- */
-/* get_next_loot          */
-/* ---------------------- */
 static dngn_item_type_t get_next_loot_type(dngn_state_t *state)
 {
     if (state->loot_bag_count == 0) {
@@ -698,19 +693,23 @@ static void reset_player_state(dngn_state_t* state) {
 static void title_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     bool reset_state = false;
-    if(event.event_type != EVENT_TICK) printf("_title_transition event_type=%d active=%d\n", event.event_type, state->active);
 
-    bool start_new_run = !state->active && event.event_type == EVENT_ALARM_BUTTON_UP;
-    bool reset_old_run = state->active && event.event_type == EVENT_ALARM_LONG_PRESS;
-    bool play = event.event_type == EVENT_ALARM_BUTTON_UP || reset_old_run;
-
-    if(start_new_run || reset_old_run) {
-        // initialize player for new run
-        reset_player_state(state);
-    }
-    if (play) {
-        state->active = true;
-        state->screen = DNGN_SCREEN_DESCEND;
+    switch(event.event_type) {
+        case EVENT_ALARM_BUTTON_UP:
+            // if they didn't have anything active already, clear the state
+            if(!state->active) {
+                reset_player_state(state);
+            }
+            // start the run
+            state->active = true;
+            state->screen = DNGN_SCREEN_DESCEND;
+            break;
+        case EVENT_ALARM_LONG_PRESS:
+            // setting it to inactive will make it reset when they begin
+            state->active = false;
+            break;
+        default:
+            default_button_handler(event);
     }
 }
 
@@ -730,9 +729,15 @@ static void title_display(movement_event_t event, void *context) {
 static void encounter_transition(movement_event_t event, void *context) {
     dngn_state_t *state = (dngn_state_t *)context;
     if(state->screen_changed) {
-        start_anim(&state->anim, 6, 3, true);
+        state->menu_index = 0;
+        // 2 frames, display the stat for the enemy, then the player
+        start_anim(&state->anim, 6, 2, true);
     }
-    if(skipped_anim(event, state)) {
+    // switch between stats, otherwise skip to encounter options
+    if(event.event_type == EVENT_LIGHT_BUTTON_DOWN) {
+        // 2 stat options, HP and attack
+        state->menu_index = (state->menu_index + 1) % 2;
+    } else if(skipped_anim(event, state)) {
         state->screen = DNGN_SCREEN_ENCOUNTER_MENU;
         printf("Going to encounter MENU\n");
     } else {
@@ -771,7 +776,7 @@ static void encounter_menu_transition(movement_event_t event, void *context) {
         50% Enemy misses player.
     */
     switch (event.event_type) {
-        case EVENT_LIGHT_BUTTON_UP:
+        case EVENT_LIGHT_BUTTON_DOWN:
             // switch to the next menu item and reset ticks for it
             state->anim.current_tick = 0;
             bool invalid_choice = true;
@@ -856,7 +861,7 @@ static void encounter_menu_display(movement_event_t event, void *context) {
             } else {
                 snprintf(buf, sizeof buf, "%4d", (int)state->player.damage);
                 watch_display_text(WATCH_POSITION_BOTTOM, buf);
-                watch_display_text(WATCH_POSITION_SECONDS, "Pt");
+                watch_display_text(WATCH_POSITION_SECONDS, "dg");
             }
             break;
         case DNGN_ACTION_HEAL:
@@ -878,7 +883,7 @@ static void encounter_menu_display(movement_event_t event, void *context) {
             break;
         case DNGN_ACTION_EQUIP_SHEILD:
             watch_display_text(WATCH_POSITION_BOTTOM, "SHiELD");
-            watch_display_text(WATCH_POSITION_TOP, state->player.shield_equipped ? "On" : "no");
+            watch_display_text(WATCH_POSITION_TOP, state->player.shield_equipped ? "On" : "No");
             // print num shields left
             snprintf(buf, sizeof buf, "%2d", (int)state->player.shields);
             watch_display_text(WATCH_POSITION_TOP_RIGHT, buf);
@@ -950,6 +955,8 @@ static void loot_transition(movement_event_t event, void *context) {
                 state->player.hp = clamp(state->player.hp + state->found_item.value, 0, state->player.max_hp);
             } else if (state->found_item.type == DNGN_ITEM_GOLD) {
                 state->player.gold += state->found_item.value;
+            } else if (state->found_item.type == DNGN_ITEM_HP) {
+                state->player.hp = clamp(state->player.hp + state->found_item.value, 0, state->player.max_hp);
             } else if (state->found_item.type == DNGN_ITEM_NONE) {
                 // no nothing
             } else {
@@ -994,6 +1001,9 @@ static void loot_display(movement_event_t event, void *context) {
             break;
         case DNGN_ITEM_MAX_HP_UP:
             watch_display_text(WATCH_POSITION_BOTTOM, "HPUP");
+            break;
+        case DNGN_ITEM_HP:
+            watch_display_text(WATCH_POSITION_BOTTOM, "HP");
             break;
         case DNGN_ITEM_NONE:
             watch_display_text(WATCH_POSITION_TOP, "No");
