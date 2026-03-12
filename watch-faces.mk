@@ -56,4 +56,5 @@ SRCS += \
   ./watch-faces/complication/simon_face.c \
   ./watch-faces/complication/ping_face.c \
   ./watch-faces/complication/dungeon_face.c \
+  ./watch-faces/complication/tomato_face.c \
 # New watch faces go above this line.
