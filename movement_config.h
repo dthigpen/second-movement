@@ -28,8 +28,18 @@
 #include "movement_faces.h"
 
 const watch_face_t watch_faces[] = {
-    dungeon_face,
+    // primary
     clock_face,
+    advanced_alarm_face,
+    countdown_face,
+    fast_stopwatch_face,
+    sunrise_sunset_face,
+    pulsometer_face,
+    dungeon_face,
+    // secondary
+    probability_face,
+    temperature_display_face,
+    voltage_face,
     settings_face,
     set_time_face,
 };
