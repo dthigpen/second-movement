@@ -27,11 +27,20 @@
 
 #include "movement_faces.h"
 
+/*
+INTEGRATION NOTES
+Start on main synced with upstream
+Merge in my own fork faces, e.g. dungeon_face
+Add face to this file, commit
+Merge in tahnok tomato face branch
+Add face to the file, commit
+*/
 const watch_face_t watch_faces[] = {
     // primary
     clock_face,
     advanced_alarm_face,
     countdown_face,
+    tomato_face,
     fast_stopwatch_face,
     sunrise_sunset_face,
     pulsometer_face,
